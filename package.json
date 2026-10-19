@@ -9,7 +9,8 @@
     "build": "tsc",
     "test": "vitest run",
     "test:watch": "vitest",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "bot": "tsx src/bot/index.ts"
   },
   "repository": {
     "type": "git",
@@ -28,6 +29,7 @@
   "license": "MIT",
   "dependencies": {
     "dotenv": "^16.4.7",
+    "grammy": "^1.46.0",
     "zod": "^3.24.2"
   },
   "devDependencies": {
