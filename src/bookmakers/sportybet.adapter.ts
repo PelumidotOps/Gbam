@@ -14,45 +14,46 @@ export class SportyBetAdapter implements BookmakerAdapter {
     const outcome = String(rawOutcomeCode).trim().toUpperCase();
 
     // 1X2 Match Result (SportyBet market 1)
-    if (marketId === '1') {
-      if (outcome === '1') return { marketType: 'MATCH_RESULT', selection: 'HOME' };
-      if (outcome === '2') return { marketType: 'MATCH_RESULT', selection: 'AWAY' };
-      if (outcome === 'X') return { marketType: 'MATCH_RESULT', selection: 'DRAW' };
+    if (marketId === '1' || outcome === 'HOME' || outcome === 'AWAY' || outcome === 'DRAW') {
+      if (outcome === '1' || outcome.includes('HOME')) return { marketType: 'MATCH_RESULT', selection: 'HOME' };
+      if (outcome === '2' || outcome.includes('AWAY')) return { marketType: 'MATCH_RESULT', selection: 'AWAY' };
+      if (outcome === 'X' || outcome.includes('DRAW')) return { marketType: 'MATCH_RESULT', selection: 'DRAW' };
     }
 
     // Double Chance (SportyBet market 10)
-    if (marketId === '10') {
-      if (outcome === '1X' || outcome === '12' || outcome === 'X2') {
-        return { marketType: 'DOUBLE_CHANCE', selection: outcome };
-      }
+    if (marketId === '10' || outcome.includes('1X') || outcome.includes('X2') || outcome.includes('12')) {
+      if (outcome.includes('1X') || outcome.includes('HOME/DRAW')) return { marketType: 'DOUBLE_CHANCE', selection: '1X' };
+      if (outcome.includes('X2') || outcome.includes('DRAW/AWAY')) return { marketType: 'DOUBLE_CHANCE', selection: 'X2' };
+      if (outcome.includes('12') || outcome.includes('HOME/AWAY')) return { marketType: 'DOUBLE_CHANCE', selection: '12' };
     }
 
     // Over/Under Goals (SportyBet market 18)
-    if (marketId === '18') {
-      if (outcome.includes('OVER_1.5') || outcome === 'O1.5') {
-        return { marketType: 'OVER_UNDER_GOALS', selection: 'OVER_1.5' };
+    if (marketId === '18' || outcome.includes('OVER') || outcome.includes('UNDER')) {
+      const isUnder = outcome.includes('UNDER') || outcome.startsWith('U');
+      if (outcome.includes('0.5')) {
+        return { marketType: 'OVER_UNDER_GOALS', selection: isUnder ? 'UNDER_0.5' : 'OVER_0.5' };
       }
-      if (outcome.includes('UNDER_1.5') || outcome === 'U1.5') {
-        return { marketType: 'OVER_UNDER_GOALS', selection: 'UNDER_1.5' };
+      if (outcome.includes('1.5')) {
+        return { marketType: 'OVER_UNDER_GOALS', selection: isUnder ? 'UNDER_1.5' : 'OVER_1.5' };
       }
-      if (outcome.includes('OVER_2.5') || outcome === 'O2.5') {
-        return { marketType: 'OVER_UNDER_GOALS', selection: 'OVER_2.5' };
+      if (outcome.includes('2.5')) {
+        return { marketType: 'OVER_UNDER_GOALS', selection: isUnder ? 'UNDER_2.5' : 'OVER_2.5' };
       }
-      if (outcome.includes('UNDER_2.5') || outcome === 'U2.5') {
-        return { marketType: 'OVER_UNDER_GOALS', selection: 'UNDER_2.5' };
+      if (outcome.includes('3.5')) {
+        return { marketType: 'OVER_UNDER_GOALS', selection: isUnder ? 'UNDER_3.5' : 'OVER_3.5' };
       }
     }
 
     // Both Teams To Score (SportyBet market 29)
-    if (marketId === '29') {
-      if (outcome === 'YES' || outcome === 'GG') return { marketType: 'BOTH_TEAMS_TO_SCORE', selection: 'YES' };
-      if (outcome === 'NO' || outcome === 'NG') return { marketType: 'BOTH_TEAMS_TO_SCORE', selection: 'NO' };
+    if (marketId === '29' || outcome.includes('GG') || outcome.includes('NG') || outcome.includes('YES') || outcome.includes('NO')) {
+      if (outcome.includes('YES') || outcome === 'GG') return { marketType: 'BOTH_TEAMS_TO_SCORE', selection: 'YES' };
+      if (outcome.includes('NO') || outcome === 'NG') return { marketType: 'BOTH_TEAMS_TO_SCORE', selection: 'NO' };
     }
 
-    // Fallback
+    // Clean fallback: format clean selection string
     return {
       marketType: 'MATCH_RESULT',
-      selection: outcome
+      selection: outcome.replace(/_/g, ' ')
     };
   }
 
@@ -76,14 +77,26 @@ export class SportyBetAdapter implements BookmakerAdapter {
 
     try {
       const res = await fetch(`${this.baseUrl}/orders/share/${cleanCode}`, {
-        headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)' }
+        headers: {
+          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+          'Accept': 'application/json, text/plain, */*'
+        }
       });
 
       if (res.ok) {
         const data = await res.json() as any;
         if (data.bizCode === 10000 && data.data?.outcomes) {
           const legs: BetLeg[] = data.data.outcomes.map((item: any, idx: number) => {
-            const normalized = this.normalizeMarket(String(item.marketId), String(item.desc || item.specifier));
+            const firstMarket = item.markets?.[0];
+            const firstOutcome = firstMarket?.outcomes?.[0];
+
+            const rawMarketId = String(firstMarket?.id || item.marketId || '1');
+            const rawDesc = String(firstOutcome?.desc || firstMarket?.desc || item.desc || firstMarket?.specifier || '');
+            const rawOdds = parseFloat(firstOutcome?.odds || item.odds || '1.50');
+
+            const normalized = this.normalizeMarket(rawMarketId, rawDesc);
+            const leagueName = item.sport?.category?.tournament?.name || item.tournamentName || 'Football League';
+
             return {
               id: `leg-${idx}`,
               fixture: {
@@ -91,15 +104,15 @@ export class SportyBetAdapter implements BookmakerAdapter {
                 sport: 'FOOTBALL',
                 homeTeam: item.homeTeamName || 'Home Team',
                 awayTeam: item.awayTeamName || 'Away Team',
-                league: item.tournamentName || 'Unknown League',
+                league: leagueName,
                 kickoffTime: new Date(item.estimateStartTime || Date.now()).toISOString(),
                 status: 'SCHEDULED'
               },
               marketType: normalized.marketType,
               selection: normalized.selection,
-              odds: Number(parseFloat(item.odds || '1.50').toFixed(2)),
+              odds: Number(rawOdds.toFixed(2)),
               bookmakerEventId: String(item.eventId),
-              bookmakerMarketId: String(item.marketId)
+              bookmakerMarketId: rawMarketId
             };
           });
 
