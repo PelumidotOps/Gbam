@@ -6,6 +6,7 @@ import { AssessedLeg, BetLeg } from '../models/types.js';
 import { ApiFootballProvider } from '../providers/api-football.provider.js';
 import { MockStatsProvider } from '../providers/mock-stats.provider.js';
 import { SportsDataProvider } from '../providers/sports-data.interface.js';
+import { SportyBetCatalog } from '../providers/sportybet-catalog.js';
 import { BetEvaluator } from '../stats/evaluator.js';
 import { PoissonModel } from '../stats/poisson.js';
 
@@ -106,54 +107,27 @@ export function createBot(token: string) {
   // /picks - Today's high-probability predictions
   bot.command('picks', async (ctx: Context) => {
     try {
-      const liveFixtures = await getLiveFixtures();
+      await ctx.reply("🔍 Pulling today's top high-probability matches from SportyBet...");
+      const picks = await SportyBetCatalog.getTopPicks(4);
 
-      let picks: Array<{ home: string; away: string; league: string; pick: string; odds: number; confidence: string }> = [];
-
-      if (liveFixtures && liveFixtures.length >= 3) {
-        // Select real live matches playing today
-        const selected = liveFixtures.slice(0, 4);
-        picks = selected.map((f, idx) => ({
-          home: f.homeTeam,
-          away: f.awayTeam,
-          league: f.league,
-          pick: idx % 2 === 0 ? 'Over 1.5 Goals' : 'Double Chance (1X)',
-          odds: idx % 2 === 0 ? 1.22 : 1.16,
-          confidence: idx % 2 === 0 ? '89%' : '92%'
-        }));
-      } else {
-        picks = [
-          { home: 'Bayern Munich', away: 'Augsburg', league: 'Bundesliga', pick: 'Over 1.5 Goals', odds: 1.18, confidence: '92%' },
-          { home: 'Arsenal', away: 'Southampton', league: 'Premier League', pick: 'Double Chance (1X)', odds: 1.14, confidence: '94%' },
-          { home: 'Real Madrid', away: 'Getafe', league: 'La Liga', pick: 'Over 1.5 Goals', odds: 1.22, confidence: '89%' },
-          { home: 'PSG', away: 'Montpellier', league: 'Ligue 1', pick: 'Over 1.5 Goals', odds: 1.20, confidence: '91%' }
-        ];
+      if (!picks || picks.length === 0) {
+        await ctx.reply('⚠️ No upcoming matches available at this moment. Please try again shortly.');
+        return;
       }
 
       const totalOdds = picks.reduce((acc, p) => acc * p.odds, 1);
-      const adapter = BookmakerRegistry.get('SportyBet');
-
-      const legs: BetLeg[] = picks.map((p, idx) => ({
-        fixture: {
-          id: `pick-${idx}`,
-          sport: 'FOOTBALL',
-          homeTeam: p.home,
-          awayTeam: p.away,
-          league: p.league,
-          kickoffTime: new Date().toISOString(),
-          status: 'SCHEDULED'
-        },
-        marketType: p.pick.includes('Goals') ? 'OVER_UNDER_GOALS' : 'DOUBLE_CHANCE',
-        selection: p.pick.includes('Goals') ? 'OVER_1.5' : '1X',
-        odds: p.odds
-      }));
-
-      const bookingCode = await adapter.generateBookingCode(legs);
+      const bookingCode = await SportyBetCatalog.generateSportyBookingCode(picks);
 
       const msg =
         `🔥 *Today's Live High-Probability Predictions*\n\n` +
-        `Real scheduled matches with high statistical confidence ($\ge 85\\%$ win rate):\n\n` +
-        picks.map(p => `• *${p.home} vs ${p.away}* (${p.league})\n  👉 *${p.pick}* (Odds: ${p.odds}) — Confidence: *${p.confidence}*`).join('\n\n') +
+        `Real scheduled matches with high statistical confidence (78% - 92% win rate):\n\n` +
+        picks
+          .map(
+            p =>
+              `• *${p.homeTeam} vs ${p.awayTeam}* (${p.tournament})\n` +
+              `  👉 *${p.marketDesc}: ${p.outcomeDesc}* (Odds: *${p.odds}*) — Confidence: *${(p.confidence * 100).toFixed(0)}%*`
+          )
+          .join('\n\n') +
         `\n\n📊 *Combined Odds:* *${totalOdds.toFixed(2)}x*\n` +
         `🎟️ *SportyBet Booking Code:* \`${bookingCode}\`\n\n` +
         `_Copy the code above directly into your SportyBet app!_`;
@@ -387,80 +361,33 @@ export function createBot(token: string) {
     const lower = text.toLowerCase();
 
     // 1. User asks for odds generation (e.g. "give me a 10 odd", "give me 5 odds", "give me 10 odds with 90% win rate")
-    const oddsMatch = lower.match(/(?:give me|build me|generate|make me|i want)\s+(?:a\s+)?(\d+(?:\.\d+)?)\s*(?:odd|odds)/i);
-    if (oddsMatch || lower.includes('10 odd') || lower.includes('5 odd') || lower.includes('2 odd')) {
+    const oddsMatch = lower.match(/(?:give me|build me|generate|make me|i want|get me)\s+(?:a\s+)?(\d+(?:\.\d+)?)\s*(?:odd|odds)/i);
+    if (oddsMatch || lower.includes('10 odd') || lower.includes('5 odd') || lower.includes('2 odd') || lower.includes('20 odd')) {
       let requestedOdds = 10.0;
       if (oddsMatch) requestedOdds = parseFloat(oddsMatch[1]);
+      else if (lower.includes('20 odd')) requestedOdds = 20.0;
       else if (lower.includes('10 odd')) requestedOdds = 10.0;
       else if (lower.includes('5 odd')) requestedOdds = 5.0;
       else if (lower.includes('2 odd')) requestedOdds = 2.0;
 
-      await ctx.reply(`🎯 Building you an optimized ~${requestedOdds}x slip with high-probability conservative picks...`);
+      await ctx.reply(`🎯 Building you an optimized ~${requestedOdds}x slip with high-probability matches from SportyBet...`);
 
       try {
-        const liveFixtures = await getLiveFixtures();
-        let fixturePool = [];
-
-        if (liveFixtures && liveFixtures.length >= 6) {
-          fixturePool = liveFixtures.slice(0, 15).map((f, idx) => ({
-            home: f.homeTeam,
-            away: f.awayTeam,
-            pick: idx % 2 === 0 ? 'Over 1.5 Goals' : 'Double Chance (1X)',
-            odds: idx % 2 === 0 ? 1.25 : 1.18,
-            marketType: (idx % 2 === 0 ? 'OVER_UNDER_GOALS' : 'DOUBLE_CHANCE') as any,
-            sel: idx % 2 === 0 ? 'OVER_1.5' : '1X',
-            league: f.league
-          }));
-        } else {
-          // Fallback pool
-          fixturePool = [
-            { home: 'Arsenal', away: 'Southampton', pick: 'Double Chance (1X)', odds: 1.15, marketType: 'DOUBLE_CHANCE' as const, sel: '1X', league: 'Premier League' },
-            { home: 'Bayern Munich', away: 'Augsburg', pick: 'Over 1.5 Goals', odds: 1.20, marketType: 'OVER_UNDER_GOALS' as const, sel: 'OVER_1.5', league: 'Bundesliga' },
-            { home: 'Real Madrid', away: 'Getafe', pick: 'Over 1.5 Goals', odds: 1.22, marketType: 'OVER_UNDER_GOALS' as const, sel: 'OVER_1.5', league: 'La Liga' },
-            { home: 'PSG', away: 'Montpellier', pick: 'Over 1.5 Goals', odds: 1.20, marketType: 'OVER_UNDER_GOALS' as const, sel: 'OVER_1.5', league: 'Ligue 1' },
-            { home: 'Man City', away: 'Wolves', pick: 'Double Chance (1X)', odds: 1.12, marketType: 'DOUBLE_CHANCE' as const, sel: '1X', league: 'Premier League' },
-            { home: 'Inter Milan', away: 'Empoli', pick: 'Over 1.5 Goals', odds: 1.25, marketType: 'OVER_UNDER_GOALS' as const, sel: 'OVER_1.5', league: 'Serie A' },
-            { home: 'Barcelona', away: 'Mallorca', pick: 'Over 1.5 Goals', odds: 1.24, marketType: 'OVER_UNDER_GOALS' as const, sel: 'OVER_1.5', league: 'La Liga' },
-            { home: 'Sporting CP', away: 'Estoril', pick: 'Over 1.5 Goals', odds: 1.22, marketType: 'OVER_UNDER_GOALS' as const, sel: 'OVER_1.5', league: 'Primeira Liga' }
-          ];
-        }
-
-        // Greedily select picks to reach requested odds
-        const selectedPicks = [];
-        let currentOdds = 1.0;
-
-        for (const p of fixturePool) {
-          if (currentOdds * p.odds <= requestedOdds * 1.35 || selectedPicks.length < 2) {
-            selectedPicks.push(p);
-            currentOdds *= p.odds;
-            if (currentOdds >= requestedOdds * 0.90) break;
-          }
-        }
-
-        const adapter = BookmakerRegistry.get('SportyBet');
-        const legs: BetLeg[] = selectedPicks.map((p, idx) => ({
-          fixture: {
-            id: `build-${idx}`,
-            sport: 'FOOTBALL',
-            homeTeam: p.home,
-            awayTeam: p.away,
-            league: p.league,
-            kickoffTime: new Date().toISOString(),
-            status: 'SCHEDULED'
-          },
-          marketType: p.marketType,
-          selection: p.sel,
-          odds: p.odds
-        }));
-
-        const bookingCode = await adapter.generateBookingCode(legs);
+        const result = await SportyBetCatalog.buildSlipForTargetOdds(requestedOdds);
 
         const msg =
-          `🎟️ *Here is your ${currentOdds.toFixed(2)}x High-Probability Slip!*\n\n` +
-          `Built using live matches with conservative safety markets (Over 1.5 & Double Chance):\n\n` +
-          selectedPicks.map(p => `• *${p.home} vs ${p.away}* (${p.league})\n  👉 *${p.pick}* (Odds: ${p.odds})`).join('\n\n') +
-          `\n\n📊 *Total Odds:* *${currentOdds.toFixed(2)}x*\n` +
-          `🎟️ *SportyBet Booking Code:* \`${bookingCode}\`\n\n` +
+          `🎟️ *Here is your ${result.totalOdds}x High-Probability Slip!*\n\n` +
+          `Built using live scheduled matches with safe, high-confidence selections:\n\n` +
+          result.picks
+            .map(
+              p =>
+                `• *${p.homeTeam} vs ${p.awayTeam}* (${p.tournament})\n` +
+                `  👉 *${p.marketDesc}: ${p.outcomeDesc}* (Odds: *${p.odds}*) — Confidence: *${(p.confidence * 100).toFixed(0)}%*`
+            )
+            .join('\n\n') +
+          `\n\n📊 *Total Odds:* *${result.totalOdds}x*\n` +
+          `🛡️ *Average Win Confidence:* *${(result.averageConfidence * 100).toFixed(0)}% per match*\n` +
+          `🎟️ *SportyBet Booking Code:* \`${result.bookingCode}\`\n\n` +
           `_Copy the code above directly into your SportyBet app!_`;
 
         await ctx.reply(msg, { parse_mode: 'Markdown' });
@@ -486,11 +413,12 @@ export function createBot(token: string) {
     }
 
     // 3. User asks "What games can I bet on today"
-    if (lower.includes('what games') || lower.includes('games today') || lower.includes('who is playing')) {
-      const liveFixtures = await getLiveFixtures();
+    if (lower.includes('what games') || lower.includes('games today') || lower.includes('who is playing') || lower.includes('matches today')) {
+      await ctx.reply("⚽ Checking today's live schedule on SportyBet...");
+      const picks = await SportyBetCatalog.getTopPicks(5);
       let gamesText = '';
-      if (liveFixtures && liveFixtures.length >= 3) {
-        gamesText = liveFixtures.slice(0, 5).map(f => `• ${f.homeTeam} vs ${f.awayTeam} (${f.league})`).join('\n');
+      if (picks && picks.length > 0) {
+        gamesText = picks.map(p => `• *${p.homeTeam} vs ${p.awayTeam}* (${p.tournament})`).join('\n');
       } else {
         gamesText = `• Arsenal vs Chelsea (Premier League)\n• Real Madrid vs Barcelona (La Liga)\n• Bayern Munich vs Dortmund (Bundesliga)`;
       }

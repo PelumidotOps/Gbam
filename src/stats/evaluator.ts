@@ -40,40 +40,40 @@ export class BetEvaluator {
     leg: BetLeg,
     probs: ModeledProbabilities
   ): number {
-    const sel = leg.selection.trim().toUpperCase();
+    const sel = leg.selection.trim().toUpperCase().replace(/[\s\.\-]+/g, '_');
 
     switch (leg.marketType) {
       case 'MATCH_RESULT':
-        if (sel === 'HOME' || sel === '1') return probs.homeWin;
-        if (sel === 'DRAW' || sel === 'X') return probs.draw;
-        if (sel === 'AWAY' || sel === '2') return probs.awayWin;
+        if (sel === 'HOME' || sel === '1' || sel.includes('HOME')) return probs.homeWin;
+        if (sel === 'DRAW' || sel === 'X' || sel.includes('DRAW')) return probs.draw;
+        if (sel === 'AWAY' || sel === '2' || sel.includes('AWAY')) return probs.awayWin;
         break;
 
       case 'DOUBLE_CHANCE':
-        if (sel === '1X' || sel === 'HOME_DRAW') return probs.dc1X;
-        if (sel === 'X2' || sel === 'DRAW_AWAY') return probs.dcX2;
-        if (sel === '12' || sel === 'HOME_AWAY') return probs.dc12;
+        if (sel === '1X' || sel.includes('1X') || sel.includes('HOME_DRAW') || sel.includes('HOME_OR_DRAW')) return probs.dc1X;
+        if (sel === 'X2' || sel.includes('X2') || sel.includes('DRAW_AWAY') || sel.includes('DRAW_OR_AWAY')) return probs.dcX2;
+        if (sel === '12' || sel.includes('12') || sel.includes('HOME_AWAY') || sel.includes('HOME_OR_AWAY')) return probs.dc12;
         break;
 
       case 'OVER_UNDER_GOALS':
-        if (sel.includes('OVER_0.5') || sel.includes('OVER_0_5')) return probs.over0_5;
-        if (sel.includes('UNDER_0.5') || sel.includes('UNDER_0_5')) return probs.under0_5;
-        if (sel.includes('OVER_1.5') || sel.includes('OVER_1_5')) return probs.over1_5;
-        if (sel.includes('UNDER_1.5') || sel.includes('UNDER_1_5')) return probs.under1_5;
-        if (sel.includes('OVER_2.5') || sel.includes('OVER_2_5')) return probs.over2_5;
-        if (sel.includes('UNDER_2.5') || sel.includes('UNDER_2_5')) return probs.under2_5;
-        if (sel.includes('OVER_3.5') || sel.includes('OVER_3_5')) return probs.over3_5;
-        if (sel.includes('UNDER_3.5') || sel.includes('UNDER_3_5')) return probs.under3_5;
+        if (sel.includes('OVER_0_5') || sel.includes('OVER_05')) return probs.over0_5;
+        if (sel.includes('UNDER_0_5') || sel.includes('UNDER_05')) return probs.under0_5;
+        if (sel.includes('OVER_1_5') || sel.includes('OVER_15')) return probs.over1_5;
+        if (sel.includes('UNDER_1_5') || sel.includes('UNDER_15')) return probs.under1_5;
+        if (sel.includes('OVER_2_5') || sel.includes('OVER_25')) return probs.over2_5;
+        if (sel.includes('UNDER_2_5') || sel.includes('UNDER_25')) return probs.under2_5;
+        if (sel.includes('OVER_3_5') || sel.includes('OVER_35')) return probs.over3_5;
+        if (sel.includes('UNDER_3_5') || sel.includes('UNDER_35')) return probs.under3_5;
         break;
 
       case 'BOTH_TEAMS_TO_SCORE':
-        if (sel === 'YES' || sel === 'GG') return probs.bttsYes;
-        if (sel === 'NO' || sel === 'NG') return probs.bttsNo;
+        if (sel === 'YES' || sel === 'GG' || sel.includes('YES')) return probs.bttsYes;
+        if (sel === 'NO' || sel === 'NG' || sel.includes('NO')) return probs.bttsNo;
         break;
 
       case 'DRAW_NO_BET':
-        if (sel === 'HOME' || sel === '1') return probs.dnbHome;
-        if (sel === 'AWAY' || sel === '2') return probs.dnbAway;
+        if (sel === 'HOME' || sel === '1' || sel.includes('HOME')) return probs.dnbHome;
+        if (sel === 'AWAY' || sel === '2' || sel.includes('AWAY')) return probs.dnbAway;
         break;
     }
 

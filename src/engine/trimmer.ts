@@ -118,7 +118,7 @@ export class TicketTrimmer {
     );
     const avgProb = Number(
       (
-        selected.reduce((acc, leg) => acc * leg.assessment.trueProbability, 0) /
+        selected.reduce((acc, leg) => acc + leg.assessment.trueProbability, 0) /
         (selected.length || 1)
       ).toFixed(4)
     );

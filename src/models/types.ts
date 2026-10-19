@@ -33,7 +33,9 @@ export const BetLegSchema = z.object({
   selection: z.string().min(1), // e.g. "HOME", "DRAW", "AWAY", "1X", "OVER_1_5", "YES"
   odds: z.number().positive().min(1.01),
   bookmakerEventId: z.string().optional(),
-  bookmakerMarketId: z.string().optional()
+  bookmakerMarketId: z.string().optional(),
+  specifier: z.string().optional(),
+  outcomeId: z.string().optional()
 });
 export type BetLeg = z.infer<typeof BetLegSchema>;
 
