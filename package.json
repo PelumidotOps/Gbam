@@ -1,0 +1,39 @@
+{
+  "name": "gbam-core",
+  "version": "0.1.0",
+  "description": "Gbam - Intelligent Betting Slip Engine & Probability Optimizer",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "type": "module",
+  "scripts": {
+    "build": "tsc",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "typecheck": "tsc --noEmit"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/PelumidotOps/Gbam.git"
+  },
+  "keywords": [
+    "betting",
+    "odds",
+    "probability",
+    "sports-betting",
+    "poisson",
+    "expected-value",
+    "booking-code"
+  ],
+  "author": "PelumidotOps",
+  "license": "MIT",
+  "dependencies": {
+    "dotenv": "^16.4.7",
+    "zod": "^3.24.2"
+  },
+  "devDependencies": {
+    "@types/node": "^22.13.10",
+    "tsx": "^4.19.3",
+    "typescript": "^5.8.2",
+    "vitest": "^3.0.8"
+  }
+}
