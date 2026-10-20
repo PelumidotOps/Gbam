@@ -68,8 +68,9 @@ export function createBot(token: string) {
         lines.push(`• *${p}:* \`${codes[p]}\``);
       }
     }
-    return lines.length > 0 ? lines.join('\n') : '• *SportyBet:* `SKXLEU`';
+    return lines.length > 0 ? lines.join('\n') : '• *SportyBet:* `(Pending)`';
   }
+
 
   // /start command - Friendly, clean, zero technical jargon
   bot.command('start', async (ctx: Context) => {
@@ -184,17 +185,17 @@ export function createBot(token: string) {
         `🟢 *1. Safe Double (~2.0x Odds)*\n` +
         `• Odds: *${tiered.safe.totalOdds}x* (${tiered.safe.picks.length} games, ${(tiered.safe.averageConfidence * 100).toFixed(0)}% win rate)\n` +
         tiered.safe.picks.map(p => `  👉 ${p.homeTeam} vs ${p.awayTeam}: *${p.marketDesc} (${p.outcomeDesc})* @ ${p.odds}`).join('\n') +
-        `\n🎟️ *Codes:* SportyBet: \`${tiered.safe.codes['SportyBet'] || 'SKXLEU'}\` | Football.com: \`${tiered.safe.codes['Football.com'] || '-'}\` | BetKing: \`${tiered.safe.codes['BetKing'] || '-'}\` | MSport: \`${tiered.safe.codes['MSport'] || '-'}\` | Bet9ja: \`${tiered.safe.codes['Bet9ja'] || '-'}\`\n\n` +
+        `\n🎟️ *Codes:* SportyBet: \`${tiered.safe.codes['SportyBet'] || '-'}\` | Football.com: \`${tiered.safe.codes['Football.com'] || '-'}\` | BetKing: \`${tiered.safe.codes['BetKing'] || '-'}\` | MSport: \`${tiered.safe.codes['MSport'] || '-'}\` | Bet9ja: \`${tiered.safe.codes['Bet9ja'] || '-'}\`\n\n` +
         `🟡 *2. Daily Acca (~5.0x Odds)*\n` +
         `• Odds: *${tiered.acca.totalOdds}x* (${tiered.acca.picks.length} games, ${(tiered.acca.averageConfidence * 100).toFixed(0)}% win rate)\n` +
         tiered.acca.picks.slice(0, 4).map(p => `  👉 ${p.homeTeam} vs ${p.awayTeam}: *${p.marketDesc} (${p.outcomeDesc})* @ ${p.odds}`).join('\n') +
         (tiered.acca.picks.length > 4 ? `\n  _...plus ${tiered.acca.picks.length - 4} more safe games_` : '') +
-        `\n🎟️ *Codes:* SportyBet: \`${tiered.acca.codes['SportyBet'] || 'SKXLEU'}\` | Football.com: \`${tiered.acca.codes['Football.com'] || '-'}\` | BetKing: \`${tiered.acca.codes['BetKing'] || '-'}\` | MSport: \`${tiered.acca.codes['MSport'] || '-'}\` | Bet9ja: \`${tiered.acca.codes['Bet9ja'] || '-'}\`\n\n` +
+        `\n🎟️ *Codes:* SportyBet: \`${tiered.acca.codes['SportyBet'] || '-'}\` | Football.com: \`${tiered.acca.codes['Football.com'] || '-'}\` | BetKing: \`${tiered.acca.codes['BetKing'] || '-'}\` | MSport: \`${tiered.acca.codes['MSport'] || '-'}\` | Bet9ja: \`${tiered.acca.codes['Bet9ja'] || '-'}\`\n\n` +
         `🔴 *3. Super Slip (~10x+ Odds)*\n` +
         `• Odds: *${tiered.super.totalOdds}x* (${tiered.super.picks.length} games, ${(tiered.super.averageConfidence * 100).toFixed(0)}% win rate)\n` +
         tiered.super.picks.slice(0, 4).map(p => `  👉 ${p.homeTeam} vs ${p.awayTeam}: *${p.marketDesc} (${p.outcomeDesc})* @ ${p.odds}`).join('\n') +
         (tiered.super.picks.length > 4 ? `\n  _...plus ${tiered.super.picks.length - 4} more safe games_` : '') +
-        `\n🎟️ *Codes:* SportyBet: \`${tiered.super.codes['SportyBet'] || 'SKXLEU'}\` | Football.com: \`${tiered.super.codes['Football.com'] || '-'}\` | BetKing: \`${tiered.super.codes['BetKing'] || '-'}\` | MSport: \`${tiered.super.codes['MSport'] || '-'}\` | Bet9ja: \`${tiered.super.codes['Bet9ja'] || '-'}\`\n\n` +
+        `\n🎟️ *Codes:* SportyBet: \`${tiered.super.codes['SportyBet'] || '-'}\` | Football.com: \`${tiered.super.codes['Football.com'] || '-'}\` | BetKing: \`${tiered.super.codes['BetKing'] || '-'}\` | MSport: \`${tiered.super.codes['MSport'] || '-'}\` | Bet9ja: \`${tiered.super.codes['Bet9ja'] || '-'}\`\n\n` +
         `💡 _Tap \`/picks\` again for a fresh rotated ticket, or type \`/picks safe\`, \`/picks acca\`, or \`/picks super\` for single-slip view!_`;
 
       await ctx.reply(msg, { parse_mode: 'Markdown' });

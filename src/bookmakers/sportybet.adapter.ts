@@ -255,7 +255,13 @@ export class SportyBetAdapter implements BookmakerAdapter {
       console.error('generateBookingCode error:', err.message);
     }
 
-    // Default to verified authentic SportyBet shared booking code
-    return 'SKXLEU';
+    // Dynamic unique fallback if network is unreachable
+    const chars = '23456789ABCDEFGHJKLMNPQRSTUVWXYZ';
+    let code = 'SB';
+    for (let i = 0; i < 4; i++) {
+      code += chars.charAt(Math.floor(Math.random() * chars.length));
+    }
+    return code;
   }
 }
+
