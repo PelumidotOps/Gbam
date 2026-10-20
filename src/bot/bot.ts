@@ -73,6 +73,43 @@ export function createBot(token: string) {
     return lines.length > 0 ? lines.join('\n') : '';
   }
 
+  function formatKickoff(startTime?: number): string {
+    if (!startTime) return '';
+    const now = Date.now();
+    const diffMs = startTime - now;
+    if (diffMs < 0) return '🕒 Match Started';
+
+    const timeZone = 'Africa/Lagos';
+    const startObj = new Date(startTime);
+    const nowObj = new Date(now);
+
+    const startDay = startObj.toLocaleDateString('en-CA', { timeZone });
+    const nowDay = nowObj.toLocaleDateString('en-CA', { timeZone });
+
+    const tomorrowObj = new Date(now + 24 * 60 * 60 * 1000);
+    const tomorrowDay = tomorrowObj.toLocaleDateString('en-CA', { timeZone });
+
+    const timeStr = startObj.toLocaleTimeString('en-US', {
+      timeZone,
+      hour: 'numeric',
+      minute: '2-digit',
+      hour12: true
+    });
+
+    if (startDay === nowDay) {
+      const minsLeft = Math.round(diffMs / (60 * 1000));
+      const hoursLeft = Math.floor(minsLeft / 60);
+      const inStr = hoursLeft > 0 ? `in ${hoursLeft}h ${minsLeft % 60}m` : `in ${minsLeft}m`;
+      return `🕒 Today at ${timeStr} (${inStr})`;
+    } else if (startDay === tomorrowDay) {
+      const weekday = startObj.toLocaleDateString('en-US', { timeZone, weekday: 'short' });
+      return `🕒 Tomorrow (${weekday}) at ${timeStr}`;
+    } else {
+      const dateStr = startObj.toLocaleDateString('en-US', { timeZone, weekday: 'short', month: 'short', day: 'numeric' });
+      return `🕒 ${dateStr} at ${timeStr}`;
+    }
+  }
+
 
   // /start command - Friendly, clean, zero technical jargon
   bot.command('start', async (ctx: Context) => {
@@ -143,7 +180,7 @@ export function createBot(token: string) {
         const msg =
           `🟢 *Today's Safe Double (${t.totalOdds}x Odds)*\n\n` +
           `High-confidence picks with ${(t.averageConfidence * 100).toFixed(0)}% average win rate:\n\n` +
-          t.picks.map(p => `• *${p.homeTeam} vs ${p.awayTeam}* (${p.tournament})\n  👉 *${p.marketDesc}: ${p.outcomeDesc}* (Odds: *${p.odds}*) — Confidence: *${(p.confidence * 100).toFixed(0)}%*`).join('\n\n') +
+          t.picks.map(p => `• *${p.homeTeam} vs ${p.awayTeam}* (${p.tournament}) — ${formatKickoff(p.estimateStartTime)}\n  👉 *${p.marketDesc}: ${p.outcomeDesc}* (Odds: *${p.odds}*) — Confidence: *${(p.confidence * 100).toFixed(0)}%*`).join('\n\n') +
           `\n\n📊 *Combined Odds:* *${t.totalOdds}x*\n` +
           `🎟️ *Multi-Platform Booking Codes:*\n` +
           formatPlatformCodes(t.codes) +
@@ -157,7 +194,7 @@ export function createBot(token: string) {
         const msg =
           `🟡 *Today's Daily Acca (${t.totalOdds}x Odds)*\n\n` +
           `Balanced value accumulator with ${(t.averageConfidence * 100).toFixed(0)}% average win rate:\n\n` +
-          t.picks.map(p => `• *${p.homeTeam} vs ${p.awayTeam}* (${p.tournament})\n  👉 *${p.marketDesc}: ${p.outcomeDesc}* (Odds: *${p.odds}*) — Confidence: *${(p.confidence * 100).toFixed(0)}%*`).join('\n\n') +
+          t.picks.map(p => `• *${p.homeTeam} vs ${p.awayTeam}* (${p.tournament}) — ${formatKickoff(p.estimateStartTime)}\n  👉 *${p.marketDesc}: ${p.outcomeDesc}* (Odds: *${p.odds}*) — Confidence: *${(p.confidence * 100).toFixed(0)}%*`).join('\n\n') +
           `\n\n📊 *Combined Odds:* *${t.totalOdds}x*\n` +
           `🎟️ *Multi-Platform Booking Codes:*\n` +
           formatPlatformCodes(t.codes) +
@@ -171,7 +208,7 @@ export function createBot(token: string) {
         const msg =
           `🔴 *Today's Super Slip (${t.totalOdds}x Odds)*\n\n` +
           `Extended accumulator with ${(t.averageConfidence * 100).toFixed(0)}% average win rate:\n\n` +
-          t.picks.map(p => `• *${p.homeTeam} vs ${p.awayTeam}* (${p.tournament})\n  👉 *${p.marketDesc}: ${p.outcomeDesc}* (Odds: *${p.odds}*) — Confidence: *${(p.confidence * 100).toFixed(0)}%*`).join('\n\n') +
+          t.picks.map(p => `• *${p.homeTeam} vs ${p.awayTeam}* (${p.tournament}) — ${formatKickoff(p.estimateStartTime)}\n  👉 *${p.marketDesc}: ${p.outcomeDesc}* (Odds: *${p.odds}*) — Confidence: *${(p.confidence * 100).toFixed(0)}%*`).join('\n\n') +
           `\n\n📊 *Combined Odds:* *${t.totalOdds}x*\n` +
           `🎟️ *Multi-Platform Booking Codes:*\n` +
           formatPlatformCodes(t.codes) +
@@ -186,16 +223,16 @@ export function createBot(token: string) {
         `_Live scheduled fixtures with high statistical confidence & instant booking codes:_\n\n` +
         `🟢 *1. Safe Double (~2.0x Odds)*\n` +
         `• Odds: *${tiered.safe.totalOdds}x* (${tiered.safe.picks.length} games, ${(tiered.safe.averageConfidence * 100).toFixed(0)}% win rate)\n` +
-        tiered.safe.picks.map(p => `  👉 ${p.homeTeam} vs ${p.awayTeam}: *${p.marketDesc} (${p.outcomeDesc})* @ ${p.odds}`).join('\n') +
+        tiered.safe.picks.map(p => `  👉 ${p.homeTeam} vs ${p.awayTeam}: *${p.marketDesc} (${p.outcomeDesc})* @ ${p.odds} (${formatKickoff(p.estimateStartTime)})`).join('\n') +
         `\n🎟️ *Codes:* SportyBet: \`${tiered.safe.codes['SportyBet'] || '-'}\` | Football.com: \`${tiered.safe.codes['Football.com'] || '-'}\` | BetKing: \`${tiered.safe.codes['BetKing'] || '-'}\` | MSport: \`${tiered.safe.codes['MSport'] || '-'}\` | Bet9ja: \`${tiered.safe.codes['Bet9ja'] || '-'}\`\n\n` +
         `🟡 *2. Daily Acca (~5.0x Odds)*\n` +
         `• Odds: *${tiered.acca.totalOdds}x* (${tiered.acca.picks.length} games, ${(tiered.acca.averageConfidence * 100).toFixed(0)}% win rate)\n` +
-        tiered.acca.picks.slice(0, 4).map(p => `  👉 ${p.homeTeam} vs ${p.awayTeam}: *${p.marketDesc} (${p.outcomeDesc})* @ ${p.odds}`).join('\n') +
+        tiered.acca.picks.slice(0, 4).map(p => `  👉 ${p.homeTeam} vs ${p.awayTeam}: *${p.marketDesc} (${p.outcomeDesc})* @ ${p.odds} (${formatKickoff(p.estimateStartTime)})`).join('\n') +
         (tiered.acca.picks.length > 4 ? `\n  _...plus ${tiered.acca.picks.length - 4} more safe games_` : '') +
         `\n🎟️ *Codes:* SportyBet: \`${tiered.acca.codes['SportyBet'] || '-'}\` | Football.com: \`${tiered.acca.codes['Football.com'] || '-'}\` | BetKing: \`${tiered.acca.codes['BetKing'] || '-'}\` | MSport: \`${tiered.acca.codes['MSport'] || '-'}\` | Bet9ja: \`${tiered.acca.codes['Bet9ja'] || '-'}\`\n\n` +
         `🔴 *3. Super Slip (~10x+ Odds)*\n` +
         `• Odds: *${tiered.super.totalOdds}x* (${tiered.super.picks.length} games, ${(tiered.super.averageConfidence * 100).toFixed(0)}% win rate)\n` +
-        tiered.super.picks.slice(0, 4).map(p => `  👉 ${p.homeTeam} vs ${p.awayTeam}: *${p.marketDesc} (${p.outcomeDesc})* @ ${p.odds}`).join('\n') +
+        tiered.super.picks.slice(0, 4).map(p => `  👉 ${p.homeTeam} vs ${p.awayTeam}: *${p.marketDesc} (${p.outcomeDesc})* @ ${p.odds} (${formatKickoff(p.estimateStartTime)})`).join('\n') +
         (tiered.super.picks.length > 4 ? `\n  _...plus ${tiered.super.picks.length - 4} more safe games_` : '') +
         `\n🎟️ *Codes:* SportyBet: \`${tiered.super.codes['SportyBet'] || '-'}\` | Football.com: \`${tiered.super.codes['Football.com'] || '-'}\` | BetKing: \`${tiered.super.codes['BetKing'] || '-'}\` | MSport: \`${tiered.super.codes['MSport'] || '-'}\` | Bet9ja: \`${tiered.super.codes['Bet9ja'] || '-'}\`\n\n` +
         `💡 _Tap \`/picks\` again for a fresh rotated ticket, or type \`/picks safe\`, \`/picks acca\`, or \`/picks super\` for single-slip view!_`;
@@ -537,17 +574,6 @@ export function createBot(token: string) {
 
       try {
         const result = await SportyBetCatalog.buildSlipForTargetOdds(requestedOdds, targetPlatform, marketFilter, timeframe);
-
-        const formatKickoff = (startTime?: number): string => {
-          if (!startTime) return '';
-          const d = new Date(startTime);
-          const today = new Date();
-          const isToday = d.toDateString() === today.toDateString();
-          const timeStr = d.toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit', hour12: false });
-          if (isToday) return `🕒 Today ${timeStr}`;
-          const dayName = d.toLocaleDateString('en-GB', { weekday: 'short', month: 'short', day: 'numeric' });
-          return `🕒 ${dayName} ${timeStr}`;
-        };
 
         const minPickConfidence = Math.min(...result.picks.map(p => p.confidence));
         const minConfPct = Math.round(minPickConfidence * 100);

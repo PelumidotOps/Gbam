@@ -206,8 +206,16 @@ export class SportyBetAdapter implements BookmakerAdapter {
 
   public async generateBookingCode(legs: BetLeg[]): Promise<string> {
     try {
+      const now = Date.now();
+      const minKickoff = now + 15 * 60 * 1000;
+
       let selections = legs
-        .filter(l => Boolean(l.bookmakerEventId))
+        .filter(l => Boolean(l.bookmakerEventId && l.bookmakerEventId.startsWith('sr:match:')))
+        .filter(l => {
+          if (!l.fixture?.kickoffTime) return true;
+          const k = new Date(l.fixture.kickoffTime).getTime();
+          return isNaN(k) || k > minKickoff;
+        })
         .map(leg => {
           const mapped = this.toBookmakerMarket(leg.marketType, leg.selection);
           return {
@@ -218,17 +226,19 @@ export class SportyBetAdapter implements BookmakerAdapter {
           };
         });
 
-      // If legs don't have bookmakerEventIds, pull authentic upcoming selections from SportyBetCatalog
-      if (selections.length === 0) {
+      // If legs don't have enough valid sr:match: eventIds, pull authentic upcoming sr:match selections from SportyBetCatalog
+      if (selections.length < 2) {
         const { SportyBetCatalog } = await import('../providers/sportybet-catalog.js');
-        const count = Math.max(2, Math.min(legs.length, 5));
+        const count = Math.max(2, Math.min(legs.length, 6));
         const picks = await SportyBetCatalog.getTopPicks(count);
-        selections = picks.map(p => ({
-          eventId: p.eventId,
-          marketId: p.marketId,
-          specifier: p.specifier,
-          outcomeId: p.outcomeId
-        }));
+        selections = picks
+          .filter(p => p.eventId.startsWith('sr:match:') && (!p.estimateStartTime || p.estimateStartTime > minKickoff))
+          .map(p => ({
+            eventId: p.eventId,
+            marketId: p.marketId,
+            specifier: p.specifier,
+            outcomeId: p.outcomeId
+          }));
       }
 
       if (selections.length > 0) {
@@ -248,6 +258,34 @@ export class SportyBetAdapter implements BookmakerAdapter {
           const data = await res.json() as any;
           if (data.bizCode === 10000 && data.data?.shareCode) {
             return data.data.shareCode;
+          }
+          console.error('SportyBet share failed with bizCode:', data.bizCode, data.message);
+
+          // If rejected with 19000 (market not open yet), map selections to universal Market 10 (Double Chance)
+          if (data.bizCode === 19000) {
+            const dcSelections = selections.map(s => ({
+              eventId: s.eventId,
+              marketId: '10',
+              specifier: '',
+              outcomeId: s.outcomeId === '3' ? '11' : '10' // default to 10 (Home/Away) or 11 (Draw/Away)
+            }));
+
+            const retryRes = await fetch(`${this.baseUrl}/orders/share`, {
+              method: 'POST',
+              headers: {
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+                'Content-Type': 'application/json',
+                Accept: 'application/json'
+              },
+              body: JSON.stringify({ selections: dcSelections })
+            });
+
+            if (retryRes.ok) {
+              const retryData = await retryRes.json() as any;
+              if (retryData.bizCode === 10000 && retryData.data?.shareCode) {
+                return retryData.data.shareCode;
+              }
+            }
           }
         }
       }

@@ -124,12 +124,31 @@ export class SportyBetCatalog {
   }
 
   /**
+   * Purges expired or imminent matches (kickoff <= Date.now() + 15m) from pool and rawEvents
+   */
+  public static cleanExpiredEvents(): void {
+    const minKickoff = Date.now() + 15 * 60 * 1000;
+    for (const [id, ev] of this.rawEvents.entries()) {
+      if (!ev.estimateStartTime || ev.estimateStartTime <= minKickoff) {
+        this.rawEvents.delete(id);
+      }
+    }
+    for (const [id, item] of this.pool.entries()) {
+      if (!item.estimateStartTime || item.estimateStartTime <= minKickoff) {
+        this.pool.delete(id);
+      }
+    }
+  }
+
+  /**
    * Initializes or refreshes the live fixture pool directly from the open market (API-Football & SportyBet)
    */
   public static async refreshCatalog(): Promise<number> {
     const now = Date.now();
-    // Cache for 60 minutes to protect daily request quota
-    if (this.rawEvents.size > 50 && now - this.lastRefresh < 60 * 60 * 1000) {
+    this.cleanExpiredEvents();
+
+    // Cache for 30 minutes to protect daily request quota, provided we have fresh future events
+    if (this.rawEvents.size > 40 && now - this.lastRefresh < 30 * 60 * 1000) {
       return this.rawEvents.size;
     }
 
@@ -152,7 +171,7 @@ export class SportyBetCatalog {
               for (const f of fixtures) {
                 if (!f.fixture?.id || !f.teams?.home?.name || !f.teams?.away?.name) continue;
                 const kickoff = new Date(f.fixture.date).getTime();
-                if (kickoff < now - 15 * 60 * 1000) continue; // Skip past games
+                if (kickoff <= now + 15 * 60 * 1000) continue; // Skip past and imminent games (< 15 mins)
 
                 const eventId = `api-${f.fixture.id}`;
                 const homeName = f.teams.home.name;
@@ -165,7 +184,7 @@ export class SportyBetCatalog {
 
                 const markets: any[] = [];
 
-                // 1. Double Chance (Market 10: 1X, 12, X2) - Strictly >= 75% confidence, odds >= 1.15
+                // 1. Double Chance (Market 10: 1X, 12, X2) - Strictly >= 75% confidence, odds >= 1.12
                 const dcOutcomes = [];
                 if (probs.dc1X >= 0.75) {
                   const odds = Math.max(1.12, Number((0.98 / probs.dc1X).toFixed(2)));
@@ -301,7 +320,47 @@ export class SportyBetCatalog {
         }
       }
 
-      // 2. Also ingest live SportyBet open market events from wapUpcomingEvents
+      // 2. Ingest live upcoming fixtures from SportyBet search across top European & world clubs
+      try {
+        const clubs = [
+          'Arsenal', 'Chelsea', 'Liverpool', 'Manchester City', 'Manchester United',
+          'Real Madrid', 'Barcelona', 'Bayern Munich', 'Inter Milan', 'AC Milan',
+          'Juventus', 'PSG', 'Borussia Dortmund', 'Sporting CP', 'Porto',
+          'Benfica', 'Roma', 'Napoli', 'Tottenham', 'Atletico Madrid',
+          'Bayer Leverkusen', 'Aston Villa', 'Newcastle', 'Ajax'
+        ];
+
+        const searchResults = await Promise.all(
+          clubs.map(async club => {
+            try {
+              const res = await fetch(
+                `https://www.sportybet.com/api/ng/factsCenter/search?q=${encodeURIComponent(club)}`,
+                {
+                  headers: {
+                    'User-Agent':
+                      'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+                    Accept: 'application/json'
+                  },
+                  signal: AbortSignal.timeout(5000)
+                }
+              );
+              if (!res.ok) return [];
+              const j = (await res.json()) as any;
+              const football = j.data?.results?.find((r: any) => r.categoryId === 'sr:sport:1');
+              return (football?.matches?.upcoming || []) as any[];
+            } catch {
+              return [];
+            }
+          })
+        );
+
+        const sportyUpcoming = searchResults.flat();
+        this.ingestSportyEvents(sportyUpcoming);
+      } catch (err: any) {
+        console.error('Failed to fetch SportyBet search fixtures:', err.message);
+      }
+
+      // 3. Also ingest live SportyBet open market events from wapUpcomingEvents
       try {
         const sportyRes = await fetch(
           'https://www.sportybet.com/api/ng/factsCenter/wapUpcomingEvents?sportId=sr:sport:1',
@@ -310,13 +369,14 @@ export class SportyBetCatalog {
               'User-Agent':
                 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
               Accept: 'application/json, text/plain, */*'
-            }
+            },
+            signal: AbortSignal.timeout(5000)
           }
         );
         if (sportyRes.ok) {
           const sportyData = (await sportyRes.json()) as any;
           if (sportyData.bizCode === 10000 && Array.isArray(sportyData.data)) {
-            this.ingestSportyOutcomes(sportyData.data);
+            this.ingestSportyEvents(sportyData.data);
           }
         }
       } catch (err: any) {
@@ -326,79 +386,183 @@ export class SportyBetCatalog {
       console.error('Failed to refresh open market catalog:', err.message);
     }
 
+    this.cleanExpiredEvents();
     this.lastRefresh = now;
     return this.rawEvents.size;
   }
 
   /**
-   * Ingests any outcomes from a decoded SportyBet ticket into the catalog
+   * Ingests native SportyBet events with dynamic Poisson markets (Double Chance, Over 1.5, Under 3.5, 1X2)
    */
-  public static ingestSportyOutcomes(outcomes: any[]): void {
-    if (!Array.isArray(outcomes)) return;
+  public static ingestSportyEvents(events: any[]): void {
+    if (!Array.isArray(events)) return;
+    const now = Date.now();
+    const minKickoff = now + 15 * 60 * 1000;
 
-    for (const o of outcomes) {
-      // Only include matches that haven't started or ended yet
-      if (o.status !== 0 && o.matchStatus !== 'Not start') continue;
-      if (o.eventId) {
-        this.rawEvents.set(o.eventId, o);
-      }
+    for (const ev of events) {
+      if (!ev.eventId || !ev.homeTeamName || !ev.awayTeamName) continue;
+      const kickoff = ev.estimateStartTime;
+      if (!kickoff || kickoff <= minKickoff) continue;
+      if (ev.status !== 0 && ev.matchStatus !== 'Not start') continue;
 
-      const market = o.markets?.[0];
-      const outcome = market?.outcomes?.[0];
-      if (!o.eventId || !market?.id || !outcome?.id) continue;
+      const homeName = ev.homeTeamName;
+      const awayName = ev.awayTeamName;
+      const leagueName = ev.sport?.category?.tournament?.name || ev.tournamentName || 'Football';
+      const categoryName = ev.sport?.category?.name || 'Soccer';
 
-      const odds = parseFloat(outcome?.odds || '1.30');
-      if (isNaN(odds) || odds < 1.15) continue;
-
-      // Calculate statistical confidence using Poisson distribution expectations based on estimated team strength
-      const { homeLambda, awayLambda } = this.estimateTeamStrength(
-        o.homeTeamName || '',
-        o.awayTeamName || '',
-        o.sport?.category?.tournament?.name || 'Soccer'
-      );
+      const { homeLambda, awayLambda } = this.estimateTeamStrength(homeName, awayName, leagueName);
       const probs = PoissonModel.calculateMatchProbabilities({ homeLambda, awayLambda });
 
-      // Derive realistic statistical confidence anchored to market fair probability
-      let confidence = (1 / odds) * 0.945;
-      if (market.id === '10') {
-        // Double chance
-        if (outcome.id === '10') confidence = Math.max(confidence, probs.dc12);
-        else if (outcome.id === '11') confidence = Math.max(confidence, probs.dcX2);
-        else confidence = Math.max(confidence, probs.dc1X);
-      } else if (market.id === '18' && (market.specifier || '').includes('1.5')) {
-        // Over 1.5 Goals
-        confidence = Math.max(confidence, probs.over1_5);
-      } else if (market.id === '18' && (market.specifier || '').includes('3.5')) {
-        // Under 3.5 Goals
-        confidence = Math.max(confidence, probs.under3_5);
-      } else if (market.id === '1') {
-        // 1X2
-        if (outcome.id === '1') confidence = Math.max(confidence, probs.homeWin);
-        if (outcome.id === '3') confidence = Math.max(confidence, probs.awayWin);
+      const markets: any[] = [];
+
+      // 1. Double Chance (Market 10: 1X, 12, X2) - Strictly >= 75%
+      const dcOutcomes = [];
+      if (probs.dc1X >= 0.75) {
+        const odds = Math.max(1.12, Number((0.98 / probs.dc1X).toFixed(2)));
+        dcOutcomes.push({
+          id: '9',
+          desc: 'Home or Draw',
+          odds: String(odds),
+          probability: probs.dc1X.toFixed(2)
+        });
+      }
+      if (probs.dcX2 >= 0.75) {
+        const odds = Math.max(1.12, Number((0.98 / probs.dcX2).toFixed(2)));
+        dcOutcomes.push({
+          id: '11',
+          desc: 'Draw or Away',
+          odds: String(odds),
+          probability: probs.dcX2.toFixed(2)
+        });
+      }
+      if (probs.dc12 >= 0.75) {
+        const odds = Math.max(1.14, Number((0.98 / probs.dc12).toFixed(2)));
+        dcOutcomes.push({
+          id: '10',
+          desc: 'Home or Away',
+          odds: String(odds),
+          probability: probs.dc12.toFixed(2)
+        });
+      }
+      if (dcOutcomes.length > 0) {
+        markets.push({ id: '10', desc: 'Double Chance', outcomes: dcOutcomes });
       }
 
-      // Strictly enforce >= 75% floor
-      if (confidence < 0.75) continue;
-      confidence = Math.min(0.96, Math.max(0.75, confidence));
+      // 2. Over 1.5 Goals (Market 18, specifier total=1.5) - Only if event supports it
+      const evSupportsO15 = Array.isArray(ev.markets) && ev.markets.some((m: any) => m.id === '18' && (m.specifier || '').includes('1.5'));
+      if (evSupportsO15 && probs.over1_5 >= 0.75) {
+        const odds = Math.max(1.15, Number((0.98 / probs.over1_5).toFixed(2)));
+        markets.push({
+          id: '18',
+          desc: 'Over/Under',
+          specifier: 'total=1.5',
+          outcomes: [
+            {
+              id: '12',
+              desc: 'Over 1.5',
+              odds: String(odds),
+              probability: probs.over1_5.toFixed(2)
+            }
+          ]
+        });
+      }
 
-      const item: SportyMatchOutcome = {
-        eventId: o.eventId,
-        homeTeam: o.homeTeamName || 'Home Team',
-        awayTeam: o.awayTeamName || 'Away Team',
-        tournament: o.sport?.category?.tournament?.name || 'International',
-        category: o.sport?.category?.name || 'Soccer',
-        marketId: market.id,
-        marketDesc: market.desc || 'Market',
-        specifier: market.specifier || '',
-        outcomeId: outcome.id,
-        outcomeDesc: outcome.desc || 'Selection',
-        odds,
-        confidence,
-        estimateStartTime: o.estimateStartTime
+      // 3. Under 3.5 Goals (Market 18, specifier total=3.5) - Only if event supports it
+      const evSupportsU35 = Array.isArray(ev.markets) && ev.markets.some((m: any) => m.id === '18' && (m.specifier || '').includes('3.5'));
+      if (evSupportsU35 && probs.under3_5 >= 0.75) {
+        const odds = Math.max(1.15, Number((0.98 / probs.under3_5).toFixed(2)));
+        markets.push({
+          id: '18',
+          desc: 'Over/Under',
+          specifier: 'total=3.5',
+          outcomes: [
+            {
+              id: '13',
+              desc: 'Under 3.5',
+              odds: String(odds),
+              probability: probs.under3_5.toFixed(2)
+            }
+          ]
+        });
+      }
+
+      // 4. Straight Favorite 1X2 (Market 1)
+      if (probs.homeWin >= 0.75) {
+        const odds = Math.max(1.18, Number((0.98 / probs.homeWin).toFixed(2)));
+        if (odds <= 1.45) {
+          markets.push({
+            id: '1',
+            desc: '1X2',
+            outcomes: [{ id: '1', desc: 'Home', odds: String(odds), probability: probs.homeWin.toFixed(2) }]
+          });
+        }
+      } else if (probs.awayWin >= 0.75) {
+        const odds = Math.max(1.18, Number((0.98 / probs.awayWin).toFixed(2)));
+        if (odds <= 1.45) {
+          markets.push({
+            id: '1',
+            desc: '1X2',
+            outcomes: [{ id: '3', desc: 'Away', odds: String(odds), probability: probs.awayWin.toFixed(2) }]
+          });
+        }
+      }
+
+      // If original event already had markets (e.g. from eventDetails or search), preserve them
+      if (Array.isArray(ev.markets) && ev.markets.length > 0) {
+        for (const om of ev.markets) {
+          if (!markets.some(m => m.id === om.id && (m.specifier || '') === (om.specifier || ''))) {
+            markets.push(om);
+          }
+        }
+      }
+
+      const rawEvent = {
+        ...ev,
+        eventId: ev.eventId,
+        homeTeamName: homeName,
+        awayTeamName: awayName,
+        estimateStartTime: kickoff,
+        status: 0,
+        matchStatus: 'Not start',
+        sport: {
+          category: {
+            name: categoryName,
+            tournament: { name: leagueName }
+          }
+        },
+        markets
       };
 
-      this.pool.set(item.eventId, item);
+      this.rawEvents.set(ev.eventId, rawEvent);
+
+      // Ingest best safe outcome into pool
+      const firstMarket = markets[0];
+      const firstOutcome = firstMarket?.outcomes?.[0];
+      if (firstOutcome) {
+        this.pool.set(ev.eventId, {
+          eventId: ev.eventId,
+          homeTeam: homeName,
+          awayTeam: awayName,
+          tournament: leagueName,
+          category: categoryName,
+          marketId: firstMarket.id,
+          marketDesc: firstMarket.desc,
+          specifier: firstMarket.specifier || '',
+          outcomeId: firstOutcome.id,
+          outcomeDesc: firstOutcome.desc,
+          odds: parseFloat(firstOutcome.odds),
+          confidence: parseFloat(firstOutcome.probability || '0.76'),
+          estimateStartTime: kickoff
+        });
+      }
     }
+  }
+
+  /**
+   * Backward-compatible alias for ingestSportyEvents
+   */
+  public static ingestSportyOutcomes(outcomes: any[]): void {
+    this.ingestSportyEvents(outcomes);
   }
 
   /**
@@ -471,7 +635,9 @@ export class SportyBetCatalog {
    */
   public static async getTopPicks(count: number = 4): Promise<SportyMatchOutcome[]> {
     await this.refreshCatalog();
-    const all = Array.from(this.pool.values());
+    this.cleanExpiredEvents();
+    const minKickoff = Date.now() + 15 * 60 * 1000;
+    const all = Array.from(this.pool.values()).filter(p => p.estimateStartTime && p.estimateStartTime > minKickoff);
 
     // Sort by confidence descending, then by conservative safe odds
     const sorted = all.sort((a, b) => b.confidence - a.confidence || a.odds - b.odds);
@@ -496,7 +662,9 @@ export class SportyBetCatalog {
    */
   public static async getTieredPicks(): Promise<TieredPicksResult> {
     await this.refreshCatalog();
-    const all = Array.from(this.pool.values());
+    this.cleanExpiredEvents();
+    const minKickoff = Date.now() + 15 * 60 * 1000;
+    const all = Array.from(this.pool.values()).filter(p => p.estimateStartTime && p.estimateStartTime > minKickoff);
 
     // Sort pool by highest confidence first
     const sorted = all.sort((a, b) => b.confidence - a.confidence || a.odds - b.odds);
@@ -662,27 +830,38 @@ export class SportyBetCatalog {
    */
   public static async getStrictMarketOutcomes(
     marketFilter: string,
-    maxEvents: number = 30,
-    maxTimestamp?: number
+    maxEvents: number = 60,
+    maxTimestamp?: number,
+    preferredBookmaker?: string
   ): Promise<SportyMatchOutcome[]> {
     await this.refreshCatalog();
+    this.cleanExpiredEvents();
 
     const now = Date.now();
-    // Collect upcoming event IDs within timeframe
-    let events = Array.from(this.rawEvents.values());
+    const minKickoff = now + 15 * 60 * 1000;
+    // Collect upcoming event IDs strictly in the future (> 15 mins) within timeframe
+    let events = Array.from(this.rawEvents.values()).filter(e => e.estimateStartTime && e.estimateStartTime > minKickoff);
     if (events.length === 0) {
-      events = Array.from(this.pool.values()).map(p => ({
-        eventId: p.eventId,
-        homeTeamName: p.homeTeam,
-        awayTeamName: p.awayTeam,
-        estimateStartTime: p.estimateStartTime
-      }));
+      events = Array.from(this.pool.values())
+        .filter(p => p.estimateStartTime && p.estimateStartTime > minKickoff)
+        .map(p => ({
+          eventId: p.eventId,
+          homeTeamName: p.homeTeam,
+          awayTeamName: p.awayTeam,
+          estimateStartTime: p.estimateStartTime
+        }));
     }
 
     if (maxTimestamp && maxTimestamp < Infinity) {
-      events = events.filter(e => {
-        if (!e.estimateStartTime) return true;
-        return e.estimateStartTime >= now - 60 * 60 * 1000 && e.estimateStartTime <= maxTimestamp;
+      events = events.filter(e => e.estimateStartTime <= maxTimestamp);
+    }
+
+    // When requested for SportyBet, prioritize events with authentic SportyBet sr:match IDs
+    if (preferredBookmaker?.toLowerCase().includes('sporty')) {
+      events.sort((a, b) => {
+        const aIsSr = a.eventId?.startsWith('sr:match:') ? 1 : 0;
+        const bIsSr = b.eventId?.startsWith('sr:match:') ? 1 : 0;
+        return bIsSr - aIsSr;
       });
     }
 
@@ -873,25 +1052,36 @@ export class SportyBetCatalog {
   public static async getDiverseMarketCandidates(
     maxTimestamp: number,
     targetOdds: number,
-    maxEvents: number = 30
+    maxEvents: number = 60,
+    preferredBookmaker?: string
   ): Promise<SportyMatchOutcome[]> {
     await this.refreshCatalog();
+    this.cleanExpiredEvents();
 
     const now = Date.now();
-    let events = Array.from(this.rawEvents.values());
+    const minKickoff = now + 15 * 60 * 1000;
+    let events = Array.from(this.rawEvents.values()).filter(e => e.estimateStartTime && e.estimateStartTime > minKickoff);
     if (events.length === 0) {
-      events = Array.from(this.pool.values()).map(p => ({
-        eventId: p.eventId,
-        homeTeamName: p.homeTeam,
-        awayTeamName: p.awayTeam,
-        estimateStartTime: p.estimateStartTime
-      }));
+      events = Array.from(this.pool.values())
+        .filter(p => p.estimateStartTime && p.estimateStartTime > minKickoff)
+        .map(p => ({
+          eventId: p.eventId,
+          homeTeamName: p.homeTeam,
+          awayTeamName: p.awayTeam,
+          estimateStartTime: p.estimateStartTime
+        }));
     }
 
     if (maxTimestamp && maxTimestamp < Infinity) {
-      events = events.filter(e => {
-        if (!e.estimateStartTime) return true;
-        return e.estimateStartTime >= now - 60 * 60 * 1000 && e.estimateStartTime <= maxTimestamp;
+      events = events.filter(e => e.estimateStartTime <= maxTimestamp);
+    }
+
+    // When requested for SportyBet, prioritize events with authentic SportyBet sr:match IDs
+    if (preferredBookmaker?.toLowerCase().includes('sporty')) {
+      events.sort((a, b) => {
+        const aIsSr = a.eventId?.startsWith('sr:match:') ? 1 : 0;
+        const bIsSr = b.eventId?.startsWith('sr:match:') ? 1 : 0;
+        return bIsSr - aIsSr;
       });
     }
 
@@ -1116,21 +1306,23 @@ export class SportyBetCatalog {
     let scheduleLabel = "Today Only (Settles Tonight)";
 
     if (timeframe.type === 'TODAY' || !timeframe.days || timeframe.days <= 1) {
-      // End of today UTC+1 (WAT):
-      const nowDate = new Date(now);
-      const endOfToday = new Date(nowDate);
-      endOfToday.setUTCHours(23, 59, 59, 999);
-      const todayCutoff = endOfToday.getTime() + 3 * 60 * 60 * 1000;
+      // Calculate end of today in Lagos timezone (WAT, UTC+1)
+      const nowLagos = new Date(new Date().toLocaleString('en-US', { timeZone: 'Africa/Lagos' }));
+      const endOfTodayLagos = new Date(nowLagos);
+      endOfTodayLagos.setHours(23, 59, 59, 999);
+      const msUntilEndOfDay = endOfTodayLagos.getTime() - nowLagos.getTime();
+      const todayCutoff = now + msUntilEndOfDay;
 
-      // Count upcoming matches strictly playing today
+      // Count upcoming matches strictly playing today (> 15 mins from now and <= todayCutoff)
+      const minKickoff = now + 15 * 60 * 1000;
       const availableToday = Array.from(this.rawEvents.values()).filter(
-        e => e.estimateStartTime && e.estimateStartTime >= now - 60 * 60 * 1000 && e.estimateStartTime <= todayCutoff
+        e => e.estimateStartTime && e.estimateStartTime > minKickoff && e.estimateStartTime <= todayCutoff
       ).length;
 
-      // If it is late evening and today has fewer than 25 remaining matches, or if targetOdds is high (e.g. >= 10x requiring 15+ legs), automatically span to the next 24-36h (Today & Tomorrow) so tickets have maximum open-market diversity and zero platform overlap!
-      if (availableToday < 25 || targetOdds >= 10.0) {
+      // If it is late evening and today has fewer than 15 remaining matches, or if targetOdds is high (e.g. >= 10x requiring 15+ legs), automatically span to the next 24-36h (Today & Tomorrow) so tickets have maximum open-market diversity and zero platform overlap!
+      if (availableToday < 15 || targetOdds >= 10.0) {
         maxTimestamp = now + 36 * 60 * 60 * 1000;
-        scheduleLabel = availableToday < 8 ? 'Next 24 Hours (Today & Tomorrow)' : 'Today & Tomorrow';
+        scheduleLabel = availableToday < 6 ? 'Next 24 Hours (Today & Tomorrow)' : 'Today & Tomorrow';
       } else {
         maxTimestamp = todayCutoff;
         scheduleLabel = 'Today Only (Settles Tonight)';
@@ -1139,8 +1331,8 @@ export class SportyBetCatalog {
       const days = timeframe.days;
       maxTimestamp = now + days * 24 * 60 * 60 * 1000;
       const endDate = new Date(maxTimestamp);
-      const endMonth = endDate.toLocaleDateString('en-GB', { month: 'short' });
-      const endDay = endDate.getDate();
+      const endMonth = endDate.toLocaleDateString('en-GB', { month: 'short', timeZone: 'Africa/Lagos' });
+      const endDay = endDate.toLocaleDateString('en-GB', { day: 'numeric', timeZone: 'Africa/Lagos' });
       scheduleLabel = `${days}-Day Running Slip (Settles by ${endMonth} ${endDay})`;
     }
 
@@ -1152,7 +1344,7 @@ export class SportyBetCatalog {
 
     if (marketFilter) {
       // 100% STRICT MARKET FILTERING: Only extract matches that belong to this market within timeframe!
-      candidates = await this.getStrictMarketOutcomes(marketFilter, 150, maxTimestamp);
+      candidates = await this.getStrictMarketOutcomes(marketFilter, 150, maxTimestamp, preferredBookmaker);
 
       const mf = marketFilter.toUpperCase();
       if (mf === 'HOME_OR_AWAY' || mf === '12') marketCategory = 'Home or Away (12) Focused';
@@ -1175,7 +1367,7 @@ export class SportyBetCatalog {
       }
     } else {
       // General odds request across bookmakers: pull diverse live markets tailored to targetOdds from open market
-      candidates = await this.getDiverseMarketCandidates(maxTimestamp, targetOdds, 150);
+      candidates = await this.getDiverseMarketCandidates(maxTimestamp, targetOdds, 150, preferredBookmaker);
 
       const resolvedAdapter = BookmakerRegistry.get(preferredBookmaker);
       marketCategory = `${resolvedAdapter.name} Signature Advantage Markets`;
@@ -1235,11 +1427,23 @@ export class SportyBetCatalog {
     };
 
     // Prioritized selection list: Always pull Tier 1 (90%+) first, then Tier 2, then Tier 3!
-    const prioritizedEvents = [
+    let prioritizedEvents = [
       ...rotateList(tier1Events, bookmakerSeed),
       ...rotateList(tier2Events, bookmakerSeed + 13),
       ...rotateList(tier3Events, bookmakerSeed + 29)
     ];
+
+    const isSporty = preferredBookmaker.toLowerCase().includes('sporty');
+    if (isSporty) {
+      // Prioritize sr:match: fixtures so SportyBet /orders/share succeeds with a 100% authentic code!
+      prioritizedEvents.sort((a, b) => {
+        const aIsSr = a.startsWith('sr:match:');
+        const bIsSr = b.startsWith('sr:match:');
+        if (aIsSr && !bIsSr) return -1;
+        if (!aIsSr && bIsSr) return 1;
+        return 0;
+      });
+    }
 
     const selected: SportyMatchOutcome[] = [];
     let currentOdds = 1.0;
@@ -1270,16 +1474,23 @@ export class SportyBetCatalog {
     // Sort the final selected picks so the highest win rate games are displayed at the very top of the ticket!
     selected.sort((a, b) => b.confidence - a.confidence || a.odds - b.odds);
 
-    // Accurately derive schedule label from the latest kickoff time of selected matches
+    // Accurately derive schedule label from the latest kickoff time of selected matches in Lagos timezone
     let dynamicScheduleLabel = "Today Only (Settles Tonight)";
     if (selected.length > 0) {
       const latestKickoff = Math.max(...selected.map(p => p.estimateStartTime || now));
       const latestDate = new Date(latestKickoff);
-      const isToday = latestDate.toDateString() === new Date(now).toDateString();
-      if (isToday) {
+      const timeZone = 'Africa/Lagos';
+      const latestDay = latestDate.toLocaleDateString('en-CA', { timeZone });
+      const nowDay = new Date(now).toLocaleDateString('en-CA', { timeZone });
+      const tomorrowDay = new Date(now + 24 * 60 * 60 * 1000).toLocaleDateString('en-CA', { timeZone });
+
+      if (latestDay === nowDay) {
         dynamicScheduleLabel = "Today Only (Settles Tonight)";
+      } else if (latestDay === tomorrowDay) {
+        const weekday = latestDate.toLocaleDateString('en-US', { timeZone, weekday: 'short' });
+        dynamicScheduleLabel = `Today & Tomorrow (${weekday})`;
       } else {
-        const dayStr = latestDate.toLocaleDateString('en-GB', { weekday: 'short', day: 'numeric', month: 'short' });
+        const dayStr = latestDate.toLocaleDateString('en-GB', { timeZone, weekday: 'short', day: 'numeric', month: 'short' });
         dynamicScheduleLabel = `Running Slip (Settles by ${dayStr})`;
       }
     }
@@ -1293,7 +1504,10 @@ export class SportyBetCatalog {
 
     // Pick target bookmaker's code
     const resolvedAdapter = BookmakerRegistry.get(preferredBookmaker);
-    const targetBookingCode = multiCodes[resolvedAdapter.name] || (await resolvedAdapter.generateBookingCode(legs));
+    let targetBookingCode = multiCodes[resolvedAdapter.name];
+    if (!targetBookingCode || (targetBookingCode.startsWith('SB') && targetBookingCode.length === 6 && isSporty)) {
+      targetBookingCode = await resolvedAdapter.generateBookingCode(legs);
+    }
 
     return {
       picks: selected,
@@ -1312,33 +1526,38 @@ export class SportyBetCatalog {
    * Posts real selections to SportyBet official share API to create an authentic booking code
    */
   public static async generateSportyBookingCode(picks: SportyMatchOutcome[]): Promise<string> {
-    const selections = picks.map(p => ({
+    const minKickoff = Date.now() + 15 * 60 * 1000;
+    const validPicks = picks.filter(p => p.eventId.startsWith('sr:match:') && (!p.estimateStartTime || p.estimateStartTime > minKickoff));
+
+    const selections = validPicks.map(p => ({
       eventId: p.eventId,
       marketId: p.marketId,
       specifier: p.specifier,
       outcomeId: p.outcomeId
     }));
 
-    try {
-      const res = await fetch('https://www.sportybet.com/api/ng/orders/share', {
-        method: 'POST',
-        headers: {
-          'User-Agent':
-            'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-          'Content-Type': 'application/json',
-          Accept: 'application/json'
-        },
-        body: JSON.stringify({ selections })
-      });
+    if (selections.length > 0) {
+      try {
+        const res = await fetch('https://www.sportybet.com/api/ng/orders/share', {
+          method: 'POST',
+          headers: {
+            'User-Agent':
+              'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+            'Content-Type': 'application/json',
+            Accept: 'application/json'
+          },
+          body: JSON.stringify({ selections })
+        });
 
-      if (res.ok) {
-        const data = (await res.json()) as any;
-        if (data.bizCode === 10000 && data.data?.shareCode) {
-          return data.data.shareCode;
+        if (res.ok) {
+          const data = (await res.json()) as any;
+          if (data.bizCode === 10000 && data.data?.shareCode) {
+            return data.data.shareCode;
+          }
         }
+      } catch (err: any) {
+        console.error('SportyBet code generation error:', err.message);
       }
-    } catch (err: any) {
-      console.error('SportyBet code generation error:', err.message);
     }
 
     // Dynamic unique fallback if network is down
