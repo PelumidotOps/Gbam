@@ -6,7 +6,8 @@ import { AssessedLeg, BetLeg } from '../models/types.js';
 import { ApiFootballProvider } from '../providers/api-football.provider.js';
 import { MockStatsProvider } from '../providers/mock-stats.provider.js';
 import { SportsDataProvider } from '../providers/sports-data.interface.js';
-import { SportyBetCatalog } from '../providers/sportybet-catalog.js';
+import { SportyBetCatalog, SlipTimeframe } from '../providers/sportybet-catalog.js';
+
 import { BetEvaluator } from '../stats/evaluator.js';
 import { PoissonModel } from '../stats/poisson.js';
 import { TeamIntelligenceService } from '../stats/team-intelligence.js';
@@ -499,23 +500,63 @@ export function createBot(token: string) {
       }
 
 
+      // Detect requested timeframe / running ticket
+      let timeframe: SlipTimeframe = { type: 'TODAY', days: 1 };
+      const dayMatch = lower.match(/(?:running\s*(?:game|ticket|slip)|span(?:s)?\s*for|for)\s*([0-9]+)\s*day/i);
+      const weekMatch = lower.match(/(?:running\s*(?:game|ticket|slip)|span(?:s)?\s*for|for)\s*(?:1|one)\s*week/i);
+
+      if (dayMatch && dayMatch[1]) {
+        const days = parseInt(dayMatch[1], 10);
+        timeframe = { type: 'RUNNING', days };
+      } else if (weekMatch || lower.includes('one week') || lower.includes('1 week')) {
+        timeframe = { type: 'RUNNING', days: 7 };
+      } else if (lower.includes('two days') || lower.includes('2 days') || lower.includes('2 day') || lower.includes('two day')) {
+        timeframe = { type: 'RUNNING', days: 2 };
+      } else if (lower.includes('three days') || lower.includes('3 days') || lower.includes('3 day') || lower.includes('three day')) {
+        timeframe = { type: 'RUNNING', days: 3 };
+      } else if (lower.includes('four days') || lower.includes('4 days') || lower.includes('four day')) {
+        timeframe = { type: 'RUNNING', days: 4 };
+      } else if (lower.includes('five days') || lower.includes('5 days')) {
+        timeframe = { type: 'RUNNING', days: 5 };
+      } else if (lower.includes('weekend')) {
+        timeframe = { type: 'RUNNING', days: 3, label: 'Weekend Running Slip' };
+      } else if (lower.includes('running')) {
+        timeframe = { type: 'RUNNING', days: 3 };
+      }
+
+      const timeframeNotice = timeframe.type === 'RUNNING'
+        ? ` (${timeframe.days}-day running ticket)`
+        : ` (today's games only)`;
+
       const statusText = marketLabel
-        ? `🎯 Building you an optimized ~${requestedOdds}x slip specializing in *${marketLabel}* for *${targetPlatform}*...`
-        : `🎯 Building you an optimized ~${requestedOdds}x slip with *${targetPlatform}* signature high-probability markets...`;
+        ? `🎯 Building you an optimized ~${requestedOdds}x slip specializing in *${marketLabel}* for *${targetPlatform}*${timeframeNotice}...`
+        : `🎯 Building you an optimized ~${requestedOdds}x slip with *${targetPlatform}* signature high-probability markets${timeframeNotice}...`;
 
       await ctx.reply(statusText, { parse_mode: 'Markdown' });
 
       try {
-        const result = await SportyBetCatalog.buildSlipForTargetOdds(requestedOdds, targetPlatform, marketFilter);
+        const result = await SportyBetCatalog.buildSlipForTargetOdds(requestedOdds, targetPlatform, marketFilter, timeframe);
+
+        const formatKickoff = (startTime?: number): string => {
+          if (!startTime) return '';
+          const d = new Date(startTime);
+          const today = new Date();
+          const isToday = d.toDateString() === today.toDateString();
+          const timeStr = d.toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit', hour12: false });
+          if (isToday) return `🕒 Today ${timeStr}`;
+          const dayName = d.toLocaleDateString('en-GB', { weekday: 'short', month: 'short', day: 'numeric' });
+          return `🕒 ${dayName} ${timeStr}`;
+        };
 
         const msg =
           `🎟️ *Here is your ${result.totalOdds}x High-Probability Slip!*\n` +
-          `📌 *Focus:* _${result.marketCategory}_\n\n` +
-          `Built using live scheduled matches with safe, high-confidence selections (>=70% win rate):\n\n` +
+          `📌 *Focus:* _${result.marketCategory}_\n` +
+          `📅 *Schedule:* *${result.scheduleLabel}*\n\n` +
+          `Built using verified scheduled matches with safe, high-confidence selections (>=70% win rate):\n\n` +
           result.picks
             .map(
               p =>
-                `• *${p.homeTeam} vs ${p.awayTeam}* (${p.tournament})\n` +
+                `• *${p.homeTeam} vs ${p.awayTeam}* (${p.tournament}) — ${formatKickoff(p.estimateStartTime)}\n` +
                 `  👉 *${p.marketDesc}: ${p.outcomeDesc}* (Odds: *${p.odds}*) — Confidence: *${(p.confidence * 100).toFixed(0)}%*`
             )
             .join('\n\n') +

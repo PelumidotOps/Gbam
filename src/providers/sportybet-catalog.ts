@@ -28,7 +28,14 @@ export interface PickTier {
   codes: Record<string, string>;
 }
 
+export interface SlipTimeframe {
+  type: 'TODAY' | 'RUNNING';
+  days?: number;
+  label?: string;
+}
+
 export interface TieredPicksResult {
+
   safe: PickTier;
   acca: PickTier;
   super: PickTier;
@@ -399,24 +406,40 @@ export class SportyBetCatalog {
    */
   public static async getStrictMarketOutcomes(
     marketFilter: string,
-    maxEvents: number = 30
+    maxEvents: number = 30,
+    maxTimestamp?: number
   ): Promise<SportyMatchOutcome[]> {
     await this.refreshCatalog();
 
-    // Collect upcoming event IDs
-    let eventIds: string[] = Array.from(this.rawEvents.keys());
-    if (eventIds.length === 0) {
-      eventIds = Array.from(this.pool.keys());
+    const now = Date.now();
+    // Collect upcoming event IDs within timeframe
+    let events = Array.from(this.rawEvents.values());
+    if (events.length === 0) {
+      events = Array.from(this.pool.values()).map(p => ({
+        eventId: p.eventId,
+        homeTeamName: p.homeTeam,
+        awayTeamName: p.awayTeam,
+        estimateStartTime: p.estimateStartTime
+      }));
     }
-    const targetEventIds = eventIds.slice(0, maxEvents);
+
+    if (maxTimestamp && maxTimestamp < Infinity) {
+      events = events.filter(e => {
+        if (!e.estimateStartTime) return true;
+        return e.estimateStartTime >= now - 60 * 60 * 1000 && e.estimateStartTime <= maxTimestamp;
+      });
+    }
+
+    const targetEventIds = events.slice(0, maxEvents).map(e => e.eventId);
 
     // Fetch full event markets concurrently
-    const events = await Promise.all(targetEventIds.map(id => this.fetchEventDetails(id)));
+    const fetchedEvents = await Promise.all(targetEventIds.map(id => this.fetchEventDetails(id)));
 
     const mf = marketFilter.toUpperCase();
     const results: SportyMatchOutcome[] = [];
 
-    for (const ev of events) {
+    for (const ev of fetchedEvents) {
+
       if (!ev || !ev.markets || !Array.isArray(ev.markets)) continue;
 
       let matchedMarket: any = null;
@@ -573,7 +596,8 @@ export class SportyBetCatalog {
   public static async buildSlipForTargetOdds(
     targetOdds: number = 10.0,
     preferredBookmaker: string = 'SportyBet',
-    marketFilter?: string
+    marketFilter?: string,
+    timeframe: SlipTimeframe = { type: 'TODAY', days: 1 }
   ): Promise<{
     picks: SportyMatchOutcome[];
     totalOdds: number;
@@ -581,14 +605,36 @@ export class SportyBetCatalog {
     bookingCode: string;
     targetBookmaker: string;
     marketCategory: string;
+    scheduleLabel: string;
     multiCodes: Record<string, string>;
   }> {
+    const now = Date.now();
+    let maxTimestamp = Infinity;
+    let scheduleLabel = "Today Only (Settles Tonight)";
+
+    if (timeframe.type === 'TODAY' || !timeframe.days || timeframe.days <= 1) {
+      // End of today UTC+1 (WAT):
+      const nowDate = new Date(now);
+      const endOfToday = new Date(nowDate);
+      endOfToday.setUTCHours(23, 59, 59, 999);
+      // Add 3-hour buffer for late kickoff ending
+      maxTimestamp = endOfToday.getTime() + 3 * 60 * 60 * 1000;
+      scheduleLabel = "Today Only (Settles Tonight)";
+    } else {
+      const days = timeframe.days;
+      maxTimestamp = now + days * 24 * 60 * 60 * 1000;
+      const endDate = new Date(maxTimestamp);
+      const endMonth = endDate.toLocaleDateString('en-GB', { month: 'short' });
+      const endDay = endDate.getDate();
+      scheduleLabel = `${days}-Day Running Slip (Settles by ${endMonth} ${endDay})`;
+    }
+
     let candidates: SportyMatchOutcome[] = [];
     let marketCategory = 'Platform High-Win-Rate Signature Markets';
 
     if (marketFilter) {
-      // 100% STRICT MARKET FILTERING: Only extract matches that belong to this market!
-      candidates = await this.getStrictMarketOutcomes(marketFilter);
+      // 100% STRICT MARKET FILTERING: Only extract matches that belong to this market within timeframe!
+      candidates = await this.getStrictMarketOutcomes(marketFilter, 30, maxTimestamp);
 
       const mf = marketFilter.toUpperCase();
       if (mf === 'HOME_OR_AWAY' || mf === '12') marketCategory = 'Home or Away (12) Focused';
@@ -606,7 +652,7 @@ export class SportyBetCatalog {
 
       if (candidates.length === 0) {
         throw new Error(
-          `No live scheduled matches currently offer "${marketCategory}" with verified high confidence. Please choose another market type or try a general odds request.`
+          `No live matches scheduled within ${scheduleLabel} currently offer "${marketCategory}". Try extending your ticket duration (e.g. "for 2 days") or choose another market type.`
         );
       }
     } else {
@@ -618,6 +664,12 @@ export class SportyBetCatalog {
       const rotated = [...all.slice(step), ...all.slice(0, step)];
       const safePool = rotated.filter(m => m.confidence >= 0.70);
       candidates = safePool.length >= 4 ? safePool : rotated;
+
+      // Filter candidates by timeframe
+      candidates = candidates.filter(m => {
+        if (!m.estimateStartTime) return true;
+        return m.estimateStartTime >= now - 60 * 60 * 1000 && m.estimateStartTime <= maxTimestamp;
+      });
 
       const resolvedAdapter = BookmakerRegistry.get(preferredBookmaker);
       marketCategory = `${resolvedAdapter.name} Signature Advantage Markets`;
@@ -644,7 +696,6 @@ export class SportyBetCatalog {
       }
     }
 
-
     const avgConfidence =
       selected.reduce((acc, m) => acc + m.confidence, 0) / (selected.length || 1);
 
@@ -663,9 +714,11 @@ export class SportyBetCatalog {
       bookingCode: targetBookingCode,
       targetBookmaker: resolvedAdapter.name,
       marketCategory,
+      scheduleLabel,
       multiCodes
     };
   }
+
 
   /**
    * Posts real selections to SportyBet official share API to create an authentic booking code
