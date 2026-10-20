@@ -189,59 +189,77 @@ export class TicketTrimmer {
 
   /**
    * Knapsack Subset Solver:
-   * Finds the combination of legs that lands closest to targetOdds while maximizing cumulative probability.
+   * Finds the combination of legs that lands closest to targetOdds while strictly maximizing cumulative win probability.
    */
   private static optimizeForTargetOdds(
     candidates: AssessedLeg[],
     targetOdds: number,
     targetCount?: number
   ): AssessedLeg[] {
-    // If candidate set is small (<= 20), run combinatorial branch-and-bound
-    if (candidates.length <= 18) {
-      let bestCombination: AssessedLeg[] = [candidates[0]];
-      let bestDistance = Infinity;
-      let bestProb = -1;
+    // Sort candidates by true probability descending so we evaluate safest legs first
+    const sorted = [...candidates].sort(
+      (a, b) => b.assessment.trueProbability - a.assessment.trueProbability
+    );
 
-      const totalSubsets = 1 << candidates.length;
+    // Take top 16 safest candidates for exact combinatorial knapsack optimization
+    const pool = sorted.slice(0, 16);
 
-      for (let mask = 1; mask < totalSubsets; mask++) {
-        const subset: AssessedLeg[] = [];
-        let odds = 1.0;
-        let prob = 1.0;
+    let bestCombination: AssessedLeg[] = [pool[0]];
+    let bestScore = -Infinity;
 
-        for (let i = 0; i < candidates.length; i++) {
-          if ((mask & (1 << i)) !== 0) {
-            subset.push(candidates[i]);
-            odds *= candidates[i].odds;
-            prob *= candidates[i].assessment.trueProbability;
-          }
+    // Search combinations of size 1 up to 7
+    const evaluateSubset = (subset: AssessedLeg[]) => {
+      if (subset.length === 0) return;
+      if (targetCount && subset.length !== targetCount) return;
+
+      const odds = subset.reduce((acc, l) => acc * l.odds, 1);
+      const prob = subset.reduce((acc, l) => acc * l.assessment.trueProbability, 1);
+      const distance = Math.abs(odds - targetOdds);
+      const relativeDist = distance / targetOdds;
+
+      // High score when close to targetOdds and high cumulative probability
+      if (relativeDist <= 0.28) {
+        // Within 28% of target odds: heavily weight cumulative probability and penalize distance
+        const score = prob * (1.0 - relativeDist * 0.4);
+        if (score > bestScore) {
+          bestScore = score;
+          bestCombination = [...subset];
         }
-
-        if (targetCount && subset.length !== targetCount) continue;
-
-        const distance = Math.abs(odds - targetOdds);
-
-        // Prioritize landing closest to target odds, breaking ties by highest probability
-        if (distance < bestDistance) {
-          bestDistance = distance;
-          bestProb = prob;
-          bestCombination = subset;
-        } else if (Math.abs(distance - bestDistance) < 0.05 && prob > bestProb) {
-          bestDistance = distance;
-          bestProb = prob;
-          bestCombination = subset;
+      } else if (bestScore === -Infinity) {
+        // If nothing within range yet, track closest
+        const score = -distance;
+        if (score > bestScore) {
+          bestScore = score;
+          bestCombination = [...subset];
         }
       }
+    };
 
-      return bestCombination;
+    const backtrack = (startIdx: number, currentSubset: AssessedLeg[]) => {
+      if (currentSubset.length > 0) {
+        evaluateSubset(currentSubset);
+      }
+      if (currentSubset.length >= 7) return;
+
+      for (let i = startIdx; i < pool.length; i++) {
+        currentSubset.push(pool[i]);
+        backtrack(i + 1, currentSubset);
+        currentSubset.pop();
+      }
+    };
+
+    backtrack(0, []);
+
+    // Fallback if no valid combination found
+    if (!bestCombination || bestCombination.length === 0) {
+      return this.selectTopByMetric(
+        candidates,
+        (a, b) => b.assessment.trueProbability - a.assessment.trueProbability,
+        targetCount,
+        targetOdds
+      );
     }
 
-    // For larger candidate sets, use probability-ranked greedy approach
-    return this.selectTopByMetric(
-      candidates,
-      (a, b) => b.assessment.trueProbability - a.assessment.trueProbability,
-      targetCount,
-      targetOdds
-    );
+    return bestCombination;
   }
 }

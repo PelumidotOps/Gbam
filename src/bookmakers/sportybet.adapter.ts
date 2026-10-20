@@ -94,7 +94,11 @@ export class SportyBetAdapter implements BookmakerAdapter {
             // Ignore catalog ingest error
           }
 
-          const legs: BetLeg[] = data.data.outcomes.map((item: any, idx: number) => {
+          // Filter to only upcoming playable matches that haven't started or ended
+          const upcoming = data.data.outcomes.filter((o: any) => o.status === 0 || o.matchStatus === 'Not start');
+          const validOutcomes = upcoming.length > 0 ? upcoming : data.data.outcomes;
+
+          const legs: BetLeg[] = validOutcomes.map((item: any, idx: number) => {
             const firstMarket = item.markets?.[0];
             const firstOutcome = firstMarket?.outcomes?.[0];
 
