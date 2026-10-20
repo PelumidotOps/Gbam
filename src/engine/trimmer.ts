@@ -196,70 +196,81 @@ export class TicketTrimmer {
     targetOdds: number,
     targetCount?: number
   ): AssessedLeg[] {
-    // Sort candidates by true probability descending so we evaluate safest legs first
+    if (candidates.length === 0) return [];
+    if (candidates.length === 1) return candidates;
+
+    // Deduplicate by fixture ID and sort by true probability descending (safest first)
     const sorted = [...candidates].sort(
-      (a, b) => b.assessment.trueProbability - a.assessment.trueProbability
+      (a, b) => b.assessment.trueProbability - a.assessment.trueProbability || a.odds - b.odds
     );
 
-    // Take top 16 safest candidates for exact combinatorial knapsack optimization
-    const pool = sorted.slice(0, 16);
-
-    let bestCombination: AssessedLeg[] = [pool[0]];
-    let bestScore = -Infinity;
-
-    // Search combinations of size 1 up to 7
-    const evaluateSubset = (subset: AssessedLeg[]) => {
-      if (subset.length === 0) return;
-      if (targetCount && subset.length !== targetCount) return;
-
-      const odds = subset.reduce((acc, l) => acc * l.odds, 1);
-      const prob = subset.reduce((acc, l) => acc * l.assessment.trueProbability, 1);
-      const distance = Math.abs(odds - targetOdds);
-      const relativeDist = distance / targetOdds;
-
-      // High score when close to targetOdds and high cumulative probability
-      if (relativeDist <= 0.28) {
-        // Within 28% of target odds: heavily weight cumulative probability and penalize distance
-        const score = prob * (1.0 - relativeDist * 0.4);
-        if (score > bestScore) {
-          bestScore = score;
-          bestCombination = [...subset];
-        }
-      } else if (bestScore === -Infinity) {
-        // If nothing within range yet, track closest
-        const score = -distance;
-        if (score > bestScore) {
-          bestScore = score;
-          bestCombination = [...subset];
-        }
-      }
-    };
-
-    const backtrack = (startIdx: number, currentSubset: AssessedLeg[]) => {
-      if (currentSubset.length > 0) {
-        evaluateSubset(currentSubset);
-      }
-      if (currentSubset.length >= 7) return;
-
-      for (let i = startIdx; i < pool.length; i++) {
-        currentSubset.push(pool[i]);
-        backtrack(i + 1, currentSubset);
-        currentSubset.pop();
-      }
-    };
-
-    backtrack(0, []);
-
-    // Fallback if no valid combination found
-    if (!bestCombination || bestCombination.length === 0) {
-      return this.selectTopByMetric(
-        candidates,
-        (a, b) => b.assessment.trueProbability - a.assessment.trueProbability,
-        targetCount,
-        targetOdds
-      );
+    // If explicit target leg count is requested, return top safest legs of that count
+    if (targetCount && targetCount > 0) {
+      return sorted.slice(0, Math.min(targetCount, sorted.length));
     }
 
-    return bestCombination;
+    // Multi-seed heuristic knapsack:
+    // Tests combinations starting from different top-tier seeds to find the optimal cumulative probability
+    let bestCombination: AssessedLeg[] = [];
+    let bestDiff = Infinity;
+    let bestProb = -1;
+
+    const seedCount = Math.min(sorted.length, 8);
+    for (let s = 0; s < seedCount; s++) {
+      const currentSlip: AssessedLeg[] = [];
+      const usedFixtures = new Set<string>();
+      let currentOdds = 1.0;
+
+      // Add starting seed
+      currentSlip.push(sorted[s]);
+      usedFixtures.add(sorted[s].fixture.id);
+      currentOdds *= sorted[s].odds;
+
+      // Greedily add next safest available legs
+      for (let i = 0; i < sorted.length; i++) {
+        const candidate = sorted[i];
+        if (usedFixtures.has(candidate.fixture.id)) continue;
+
+        // Check if adding this leg would overshoot target odds too much
+        if (currentOdds * candidate.odds <= targetOdds * 1.35 || currentOdds < targetOdds * 0.88) {
+          currentSlip.push(candidate);
+          usedFixtures.add(candidate.fixture.id);
+          currentOdds *= candidate.odds;
+
+          // If we reached near the target odds, this seed has achieved its goal
+          if (currentOdds >= targetOdds * 0.90) {
+            break;
+          }
+        }
+      }
+
+      // Calculate score for this combination
+      const diff = Math.abs(currentOdds - targetOdds);
+      const cumProb = currentSlip.reduce((acc, l) => acc * l.assessment.trueProbability, 1);
+
+      // Prioritize proximity to target odds and higher cumulative probability
+      if (
+        (diff < bestDiff && (currentSlip.length >= 2 || targetOdds <= 1.5)) ||
+        (Math.abs(diff - bestDiff) < 1.0 && cumProb > bestProb)
+      ) {
+        bestDiff = diff;
+        bestProb = cumProb;
+        bestCombination = [...currentSlip];
+      }
+    }
+
+    // Guarantee that we don't return 1 leg if targetOdds > 2.0 and more candidates exist
+    if (bestCombination.length <= 1 && sorted.length >= 2 && targetOdds > 1.8) {
+      const fallback: AssessedLeg[] = [];
+      let accOdds = 1.0;
+      for (const l of sorted) {
+        fallback.push(l);
+        accOdds *= l.odds;
+        if (accOdds >= targetOdds * 0.90 && fallback.length >= 2) break;
+      }
+      return fallback;
+    }
+
+    return bestCombination.length > 0 ? bestCombination : [sorted[0]];
   }
 }

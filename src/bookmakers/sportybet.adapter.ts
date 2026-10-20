@@ -13,18 +13,52 @@ export class SportyBetAdapter implements BookmakerAdapter {
     const marketId = String(rawMarketCode).trim();
     const outcome = String(rawOutcomeCode).trim().toUpperCase();
 
-    // 1X2 Match Result (SportyBet market 1)
-    if (marketId === '1' || outcome === 'HOME' || outcome === 'AWAY' || outcome === 'DRAW') {
-      if (outcome === '1' || outcome.includes('HOME')) return { marketType: 'MATCH_RESULT', selection: 'HOME' };
-      if (outcome === '2' || outcome.includes('AWAY')) return { marketType: 'MATCH_RESULT', selection: 'AWAY' };
-      if (outcome === 'X' || outcome.includes('DRAW')) return { marketType: 'MATCH_RESULT', selection: 'DRAW' };
+    // Double Chance (SportyBet market 10)
+    if (
+      marketId === '10' ||
+      outcome.includes('1X') ||
+      outcome.includes('X2') ||
+      outcome.includes('12') ||
+      (outcome.includes('DRAW') && (outcome.includes('HOME') || outcome.includes('AWAY')))
+    ) {
+      if (outcome.includes('1X') || (outcome.includes('HOME') && outcome.includes('DRAW'))) {
+        return { marketType: 'DOUBLE_CHANCE', selection: '1X' };
+      }
+      if (outcome.includes('X2') || (outcome.includes('AWAY') && outcome.includes('DRAW'))) {
+        return { marketType: 'DOUBLE_CHANCE', selection: 'X2' };
+      }
+      if (outcome.includes('12') || (outcome.includes('HOME') && outcome.includes('AWAY'))) {
+        return { marketType: 'DOUBLE_CHANCE', selection: '12' };
+      }
+      return { marketType: 'DOUBLE_CHANCE', selection: '1X' };
     }
 
-    // Double Chance (SportyBet market 10)
-    if (marketId === '10' || outcome.includes('1X') || outcome.includes('X2') || outcome.includes('12')) {
-      if (outcome.includes('1X') || outcome.includes('HOME/DRAW')) return { marketType: 'DOUBLE_CHANCE', selection: '1X' };
-      if (outcome.includes('X2') || outcome.includes('DRAW/AWAY')) return { marketType: 'DOUBLE_CHANCE', selection: 'X2' };
-      if (outcome.includes('12') || outcome.includes('HOME/AWAY')) return { marketType: 'DOUBLE_CHANCE', selection: '12' };
+    // Handicap (SportyBet market 14, 15, 16, or containing handicap specs like 0:2, 0:3)
+    if (
+      marketId === '14' ||
+      marketId === '15' ||
+      marketId === '16' ||
+      outcome.includes('(0:') ||
+      outcome.includes('(1:') ||
+      outcome.includes('(2:') ||
+      outcome.includes('(3:') ||
+      outcome.includes('HCP') ||
+      outcome.includes('HANDICAP')
+    ) {
+      return { marketType: 'HANDICAP', selection: outcome };
+    }
+
+    // 1X2 Match Result (SportyBet market 1)
+    if (marketId === '1' || outcome === 'HOME' || outcome === 'AWAY' || outcome === 'DRAW' || outcome === '1' || outcome === '2' || outcome === 'X') {
+      if (outcome === '1' || outcome === 'HOME' || (outcome.includes('HOME') && !outcome.includes('DRAW'))) {
+        return { marketType: 'MATCH_RESULT', selection: 'HOME' };
+      }
+      if (outcome === '2' || outcome === 'AWAY' || (outcome.includes('AWAY') && !outcome.includes('DRAW'))) {
+        return { marketType: 'MATCH_RESULT', selection: 'AWAY' };
+      }
+      if (outcome === 'X' || outcome === 'DRAW') {
+        return { marketType: 'MATCH_RESULT', selection: 'DRAW' };
+      }
     }
 
     // Over/Under Goals (SportyBet market 18)

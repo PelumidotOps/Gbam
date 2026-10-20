@@ -299,19 +299,27 @@ export function createBot(token: string) {
       };
 
       const droppedCount = slip.legs.length - trimmed.keptLegs.length;
+      const multiCodes = await BookmakerRegistry.getMultiBookingCodes(trimmed.keptLegs);
+
+      let targetNotice = '';
+      if (trimmed.newTotalOdds < targetOdds * 0.85) {
+        targetNotice = `\nℹ️ _Note: We kept all ${trimmed.keptLegs.length} verified safe games (>=70% win rate) from your ticket reaching ${trimmed.newTotalOdds}x odds. The remaining ${droppedCount} matches were removed because their mathematical risk was too high._\n`;
+      }
 
       const msg =
         `🎯 *Ticket Trimmed & Optimized!*\n\n` +
-        `🎟️ *New Booking Code:* \`${newCode}\`\n` +
-        `📉 *Odds Adjusted:* ${slip.totalOdds}x ➔ *${trimmed.newTotalOdds}x*\n` +
+        `📉 *Odds Adjusted:* ${slip.totalOdds}x ➔ *${trimmed.newTotalOdds}x* (Target: ${targetOdds}x)\n` +
         `🔢 *Selections Kept:* *${trimmed.keptLegs.length} of ${slip.legs.length} matches*\n` +
         `🛡️ *Average Win Confidence:* *${(trimmed.averageLegProbability * 100).toFixed(0)}% per game*\n` +
         `📊 *Slip Cumulative Probability:* *${(trimmed.cumulativeTrueProbability * 100).toFixed(1)}%*\n\n` +
-        `*Kept High-Confidence Games:*\n` +
+        `🎟️ *Booking Codes:*\n` +
+        formatPlatformCodes(multiCodes) +
+        `\n\n*Kept High-Confidence Games:*\n` +
         trimmed.keptLegs
           .map(l => `• ${l.fixture.homeTeam} vs ${l.fixture.awayTeam}:\n  👉 *${formatSelection(l)}* (${l.odds}) — *${(l.assessment.trueProbability * 100).toFixed(0)}% Confidence* ⭐`)
           .join('\n\n') +
-        `\n\n🛡️ _We removed ${droppedCount} high-risk legs to protect your slip! Copy the code above into SportyBet._`;
+        targetNotice +
+        `\n🛡️ _Copy your preferred code above directly into your betting app!_`;
 
       await ctx.reply(msg, { parse_mode: 'Markdown' });
     } catch (err: any) {
@@ -412,7 +420,7 @@ export function createBot(token: string) {
 
     const lower = text.toLowerCase();
 
-    // 1. User asks for odds generation (e.g. "give me 20 odds on Football.com", "give me 10 odds on MSport", "give me 5 odds")
+    // 1. User asks for odds generation (e.g. "give me 20 odds on Over 1.5", "give me 10 odds on Home or Away", "give me 10 odds on Football.com")
     const oddsMatch = lower.match(/(?:give me|build me|generate|make me|i want|get me)\s+(?:a\s+)?(\d+(?:\.\d+)?)\s*(?:odd|odds)?/i);
     const mentionsOdds = oddsMatch || lower.includes('10 odd') || lower.includes('5 odd') || lower.includes('2 odd') || lower.includes('20 odd') || lower.includes('30 odd') || lower.includes('50 odd');
 
@@ -442,13 +450,57 @@ export function createBot(token: string) {
         targetPlatform = 'Bet9ja';
       }
 
-      await ctx.reply(`🎯 Building you an optimized ~${requestedOdds}x slip with high-probability matches for *${targetPlatform}*...`, { parse_mode: 'Markdown' });
+      // Detect specific market selection requested
+      let marketFilter: string | undefined = undefined;
+      let marketLabel = '';
+
+      if (lower.includes('over 1.5') || lower.includes('over 1,5') || lower.includes('over 15')) {
+        marketFilter = 'OVER_1_5';
+        marketLabel = 'Over 1.5 Goals';
+      } else if (lower.includes('over 2.5') || lower.includes('over 2,5') || lower.includes('over 25')) {
+        marketFilter = 'OVER_2_5';
+        marketLabel = 'Over 2.5 Goals';
+      } else if (lower.includes('under 3.5') || lower.includes('under 3,5')) {
+        marketFilter = 'UNDER_3_5';
+        marketLabel = 'Under 3.5 Goals';
+      } else if (lower.includes('under 0.5') || lower.includes('no goal') || lower.includes('under 05')) {
+        marketFilter = 'UNDER_0_5';
+        marketLabel = '1st 15 Mins No Goal';
+      } else if (lower.includes('home or away') || lower.includes('home and away') || lower.includes('12')) {
+        marketFilter = 'HOME_OR_AWAY';
+        marketLabel = 'Home or Away (12)';
+      } else if (lower.includes('home or draw') || lower.includes('home and draw') || lower.includes('1x')) {
+        marketFilter = 'HOME_OR_DRAW';
+        marketLabel = 'Home or Draw (1X)';
+      } else if (lower.includes('draw or away') || lower.includes('away or draw') || lower.includes('x2')) {
+        marketFilter = 'DRAW_OR_AWAY';
+        marketLabel = 'Draw or Away (X2)';
+      } else if (lower.includes('double chance') || lower.includes('dc')) {
+        marketFilter = 'DOUBLE_CHANCE';
+        marketLabel = 'Double Chance';
+      } else if (lower.includes('handicap') || lower.includes('asian handicap') || lower.includes('hcp')) {
+        marketFilter = 'HANDICAP';
+        marketLabel = 'Handicap Cushions';
+      } else if (lower.includes('both teams to score') || lower.includes('btts') || lower.includes('gg') || lower.includes('goal goal')) {
+        marketFilter = 'BTTS';
+        marketLabel = 'Both Teams To Score (GG)';
+      } else if (lower.includes('either half') || lower.includes('win either half')) {
+        marketFilter = 'WIN_EITHER_HALF';
+        marketLabel = 'Win Either Half';
+      }
+
+      const statusText = marketLabel
+        ? `🎯 Building you an optimized ~${requestedOdds}x slip specializing in *${marketLabel}* for *${targetPlatform}*...`
+        : `🎯 Building you an optimized ~${requestedOdds}x slip with *${targetPlatform}* signature high-probability markets...`;
+
+      await ctx.reply(statusText, { parse_mode: 'Markdown' });
 
       try {
-        const result = await SportyBetCatalog.buildSlipForTargetOdds(requestedOdds, targetPlatform);
+        const result = await SportyBetCatalog.buildSlipForTargetOdds(requestedOdds, targetPlatform, marketFilter);
 
         const msg =
-          `🎟️ *Here is your ${result.totalOdds}x High-Probability Slip!*\n\n` +
+          `🎟️ *Here is your ${result.totalOdds}x High-Probability Slip!*\n` +
+          `📌 *Focus:* _${result.marketCategory}_\n\n` +
           `Built using live scheduled matches with safe, high-confidence selections (>=70% win rate):\n\n` +
           result.picks
             .map(

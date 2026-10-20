@@ -20,8 +20,12 @@ export class BetEvaluator {
     if (probs) {
       const modelProb = this.resolveMarketProbability(leg, probs);
       if (modelProb > 0.05) {
-        // Harmonize statistical model with market consensus fair probability
-        trueProb = Number((0.60 * marketFairProb + 0.40 * modelProb).toFixed(4));
+        // If market fair prob indicates a consensus safe bet (>= 70%), protect it from generic model dilution
+        if (marketFairProb >= 0.70) {
+          trueProb = Number(Math.max(marketFairProb * 0.96, (0.75 * marketFairProb + 0.25 * modelProb)).toFixed(4));
+        } else {
+          trueProb = Number((0.65 * marketFairProb + 0.35 * modelProb).toFixed(4));
+        }
       }
     }
 
