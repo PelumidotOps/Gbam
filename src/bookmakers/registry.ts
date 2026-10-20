@@ -65,7 +65,7 @@ export class BookmakerRegistry {
    */
   public static async getMultiBookingCodes(
     legs: BetLeg[],
-    targetPlatforms: string[] = ['SportyBet', 'Football.com', 'BetKing', 'MSport', 'Bet9ja']
+    targetPlatforms: string[] = ['SportyBet', 'Football.com', 'BetKing', 'MSport', 'Bet9ja', '1xBet', 'Betano']
   ): Promise<Record<string, string>> {
     const results: Record<string, string> = {};
 
