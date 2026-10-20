@@ -562,11 +562,13 @@ export class SportyBetCatalog {
 
       if (matchedMarket && matchedOutcome) {
         const odds = parseFloat(matchedOutcome.odds);
+        if (isNaN(odds) || odds < 1.15) continue;
         let confidence = (1 / odds) * 0.945;
         if (matchedOutcome.probability) {
           confidence = parseFloat(matchedOutcome.probability);
         }
-        confidence = Math.min(0.95, Math.max(0.65, confidence));
+        if (confidence < 0.75) continue;
+        confidence = Math.min(0.95, Math.max(0.75, confidence));
 
         results.push({
           eventId: ev.eventId,
@@ -628,13 +630,13 @@ export class SportyBetCatalog {
 
       const eventOptions: SportyMatchOutcome[] = [];
 
-      // 1. Double Chance (Market 10)
+      // 1. Double Chance (Market 10: 1X, 12, X2) - Strictly >= 75% confidence, odds >= 1.15
       const dc = ev.markets.find((m: any) => String(m.id) === '10');
       for (const o of dc?.outcomes || []) {
         const odds = parseFloat(o.odds);
-        if (isNaN(odds) || odds <= 1.0) continue;
+        if (isNaN(odds) || odds < 1.15 || odds > 1.45) continue;
         const conf = o.probability ? parseFloat(o.probability) : (1 / odds) * 0.945;
-        if (conf >= 0.70 && odds <= 1.50) {
+        if (conf >= 0.75) {
           eventOptions.push({
             eventId: ev.eventId,
             homeTeam: ev.homeTeamName || 'Home Team',
@@ -645,22 +647,22 @@ export class SportyBetCatalog {
             marketDesc: 'Double Chance',
             specifier: '',
             outcomeId: String(o.id),
-            outcomeDesc: o.desc || 'Double Chance',
+            outcomeDesc: o.desc || (o.id === '9' ? 'Home or Draw' : o.id === '10' ? 'Home or Away' : 'Draw or Away'),
             odds,
-            confidence: Math.min(0.95, Math.max(0.65, conf)),
+            confidence: Math.min(0.95, Math.max(0.75, conf)),
             estimateStartTime: ev.estimateStartTime
           });
         }
       }
 
-      // 2. Over 1.5 Goals (Market 18)
+      // 2. Over 1.5 Goals (Market 18, specifier total=1.5) - Strictly >= 75% confidence, odds >= 1.15
       const ov15 = ev.markets.find((m: any) => String(m.id) === '18' && (m.specifier || '').includes('1.5'));
       const out15 = ov15?.outcomes?.find((o: any) => String(o.id) === '12');
       if (out15) {
         const odds = parseFloat(out15.odds);
-        if (!isNaN(odds) && odds > 1.0) {
+        if (!isNaN(odds) && odds >= 1.15 && odds <= 1.45) {
           const conf = out15.probability ? parseFloat(out15.probability) : (1 / odds) * 0.945;
-          if (conf >= 0.70 && odds <= 1.35) {
+          if (conf >= 0.75) {
             eventOptions.push({
               eventId: ev.eventId,
               homeTeam: ev.homeTeamName || 'Home Team',
@@ -673,81 +675,77 @@ export class SportyBetCatalog {
               outcomeId: '12',
               outcomeDesc: 'Over 1.5',
               odds,
-              confidence: Math.min(0.95, Math.max(0.65, conf)),
+              confidence: Math.min(0.95, Math.max(0.75, conf)),
               estimateStartTime: ev.estimateStartTime
             });
           }
         }
       }
 
-      // 3. Over 2.5 Goals (Market 18) - enabled for medium & higher target odds (>= 6x)
-      if (targetOdds >= 6.0) {
-        const ov25 = ev.markets.find((m: any) => String(m.id) === '18' && (m.specifier || '').includes('2.5'));
-        const out25 = ov25?.outcomes?.find((o: any) => String(o.id) === '12');
-        if (out25) {
-          const odds = parseFloat(out25.odds);
-          if (!isNaN(odds) && odds >= 1.30 && odds <= 1.75) {
-            const conf = out25.probability ? parseFloat(out25.probability) : (1 / odds) * 0.945;
-            if (conf >= 0.60) {
-              eventOptions.push({
-                eventId: ev.eventId,
-                homeTeam: ev.homeTeamName || 'Home Team',
-                awayTeam: ev.awayTeamName || 'Away Team',
-                tournament: ev.sport?.category?.tournament?.name || 'Football',
-                category: ev.sport?.category?.name || 'Soccer',
-                marketId: '18',
-                marketDesc: 'Over/Under',
-                specifier: 'total=2.5',
-                outcomeId: '12',
-                outcomeDesc: 'Over 2.5',
-                odds,
-                confidence: Math.min(0.95, Math.max(0.60, conf)),
-                estimateStartTime: ev.estimateStartTime
-              });
-            }
+      // 3. Over 2.5 Goals (Market 18) - Only if strictly >= 75% confidence, odds >= 1.15
+      const ov25 = ev.markets.find((m: any) => String(m.id) === '18' && (m.specifier || '').includes('2.5'));
+      const out25 = ov25?.outcomes?.find((o: any) => String(o.id) === '12');
+      if (out25) {
+        const odds = parseFloat(out25.odds);
+        if (!isNaN(odds) && odds >= 1.15 && odds <= 1.45) {
+          const conf = out25.probability ? parseFloat(out25.probability) : (1 / odds) * 0.945;
+          if (conf >= 0.75) {
+            eventOptions.push({
+              eventId: ev.eventId,
+              homeTeam: ev.homeTeamName || 'Home Team',
+              awayTeam: ev.awayTeamName || 'Away Team',
+              tournament: ev.sport?.category?.tournament?.name || 'Football',
+              category: ev.sport?.category?.name || 'Soccer',
+              marketId: '18',
+              marketDesc: 'Over/Under',
+              specifier: 'total=2.5',
+              outcomeId: '12',
+              outcomeDesc: 'Over 2.5',
+              odds,
+              confidence: Math.min(0.95, Math.max(0.75, conf)),
+              estimateStartTime: ev.estimateStartTime
+            });
           }
         }
       }
 
-      // 4. Straight 1X2 (Market 1) - Favorite only
-      if (targetOdds >= 6.0) {
-        const mr = ev.markets.find((m: any) => String(m.id) === '1');
-        const h = mr?.outcomes?.find((o: any) => String(o.id) === '1');
-        const a = mr?.outcomes?.find((o: any) => String(o.id) === '3');
-        const fav = h && a ? (parseFloat(h.odds) <= parseFloat(a.odds) ? h : a) : h || a;
-        if (fav) {
-          const odds = parseFloat(fav.odds);
-          if (!isNaN(odds) && odds >= 1.25 && odds <= 1.70) {
-            const conf = fav.probability ? parseFloat(fav.probability) : (1 / odds) * 0.945;
-            if (conf >= 0.60) {
-              eventOptions.push({
-                eventId: ev.eventId,
-                homeTeam: ev.homeTeamName || 'Home Team',
-                awayTeam: ev.awayTeamName || 'Away Team',
-                tournament: ev.sport?.category?.tournament?.name || 'Football',
-                category: ev.sport?.category?.name || 'Soccer',
-                marketId: '1',
-                marketDesc: '1X2',
-                specifier: '',
-                outcomeId: String(fav.id),
-                outcomeDesc: fav.id === '1' ? 'Home' : 'Away',
-                odds,
-                confidence: Math.min(0.95, Math.max(0.60, conf)),
-                estimateStartTime: ev.estimateStartTime
-              });
-            }
+      // 4. Straight 1X2 (Market 1) - Favorites only if strictly >= 75% confidence, odds >= 1.15
+      const mr = ev.markets.find((m: any) => String(m.id) === '1');
+      const h = mr?.outcomes?.find((o: any) => String(o.id) === '1');
+      const a = mr?.outcomes?.find((o: any) => String(o.id) === '3');
+      const fav = h && a ? (parseFloat(h.odds) <= parseFloat(a.odds) ? h : a) : h || a;
+      if (fav) {
+        const odds = parseFloat(fav.odds);
+        if (!isNaN(odds) && odds >= 1.15 && odds <= 1.35) {
+          const conf = fav.probability ? parseFloat(fav.probability) : (1 / odds) * 0.945;
+          if (conf >= 0.75) {
+            eventOptions.push({
+              eventId: ev.eventId,
+              homeTeam: ev.homeTeamName || 'Home Team',
+              awayTeam: ev.awayTeamName || 'Away Team',
+              tournament: ev.sport?.category?.tournament?.name || 'Football',
+              category: ev.sport?.category?.name || 'Soccer',
+              marketId: '1',
+              marketDesc: '1X2',
+              specifier: '',
+              outcomeId: String(fav.id),
+              outcomeDesc: fav.id === '1' ? 'Home' : 'Away',
+              odds,
+              confidence: Math.min(0.95, Math.max(0.75, conf)),
+              estimateStartTime: ev.estimateStartTime
+            });
           }
         }
       }
 
-      // 5. Safe Handicap Cushion (Market 14)
+      // 5. Safe Handicap Cushion (Market 14) - Strictly >= 75% confidence, odds >= 1.15
       const hc = ev.markets.find((m: any) => String(m.id) === '14' && (m.specifier || '').includes('0:2'));
       const outHc = hc?.outcomes?.find((o: any) => String(o.id) === '1713');
       if (outHc) {
         const odds = parseFloat(outHc.odds);
-        if (!isNaN(odds) && odds >= 1.10 && odds <= 1.35) {
+        if (!isNaN(odds) && odds >= 1.15 && odds <= 1.35) {
           const conf = (1 / odds) * 0.945;
-          if (conf >= 0.70) {
+          if (conf >= 0.75) {
             eventOptions.push({
               eventId: ev.eventId,
               homeTeam: ev.homeTeamName || 'Home Team',
@@ -760,7 +758,7 @@ export class SportyBetCatalog {
               outcomeId: String(outHc.id),
               outcomeDesc: outHc.desc || 'Away (0:2)',
               odds,
-              confidence: Math.min(0.95, Math.max(0.65, conf)),
+              confidence: Math.min(0.95, Math.max(0.75, conf)),
               estimateStartTime: ev.estimateStartTime
             });
           }
@@ -883,7 +881,9 @@ export class SportyBetCatalog {
       const options = byEvent.get(eventId) || [];
       if (options.length === 0) continue;
 
-      let chosen = options[0];
+      // Rotate market selection across requests to produce varied combinations
+      const optIdx = (this.rotationOffset + rotatedEvents.indexOf(eventId)) % options.length;
+      let chosen = options[optIdx] || options[0];
       // If we are close to targetOdds, pick a smaller cushion option if available
       if (currentOdds >= targetOdds * 0.70 && options.length > 1) {
         const safer = options.find(o => o.odds <= 1.25);
@@ -893,8 +893,22 @@ export class SportyBetCatalog {
       selected.push(chosen);
       currentOdds *= chosen.odds;
 
-      if (currentOdds >= targetOdds * 0.90 && selected.length >= 2) {
+      if (currentOdds >= targetOdds * 0.95 && selected.length >= 2) {
         break;
+      }
+    }
+
+    // Accurately derive schedule label from the latest kickoff time of selected matches
+    let dynamicScheduleLabel = "Today Only (Settles Tonight)";
+    if (selected.length > 0) {
+      const latestKickoff = Math.max(...selected.map(p => p.estimateStartTime || now));
+      const latestDate = new Date(latestKickoff);
+      const isToday = latestDate.toDateString() === new Date(now).toDateString();
+      if (isToday) {
+        dynamicScheduleLabel = "Today Only (Settles Tonight)";
+      } else {
+        const dayStr = latestDate.toLocaleDateString('en-GB', { weekday: 'short', day: 'numeric', month: 'short' });
+        dynamicScheduleLabel = `Running Slip (Settles by ${dayStr})`;
       }
     }
 
@@ -916,7 +930,7 @@ export class SportyBetCatalog {
       bookingCode: targetBookingCode,
       targetBookmaker: resolvedAdapter.name,
       marketCategory,
-      scheduleLabel,
+      scheduleLabel: dynamicScheduleLabel,
       multiCodes
     };
   }

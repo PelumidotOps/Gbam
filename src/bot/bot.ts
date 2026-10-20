@@ -61,15 +61,16 @@ export function createBot(token: string) {
     console.error('Could not set Telegram commands:', err.message);
   });
 
-  function formatPlatformCodes(codes: Record<string, string>): string {
-    const platforms = ['SportyBet', 'Football.com', 'BetKing', 'MSport', 'Bet9ja'];
+  function formatPlatformCodes(codes: Record<string, string>, excludePlatform?: string): string {
+    const platforms = ['SportyBet', 'Football.com', 'BetKing', 'MSport', 'Bet9ja', '1xBet', 'Betano'];
     const lines: string[] = [];
     for (const p of platforms) {
+      if (excludePlatform && p.toLowerCase() === excludePlatform.toLowerCase()) continue;
       if (codes[p]) {
         lines.push(`• *${p}:* \`${codes[p]}\``);
       }
     }
-    return lines.length > 0 ? lines.join('\n') : '• *SportyBet:* `(Pending)`';
+    return lines.length > 0 ? lines.join('\n') : '';
   }
 
 
@@ -548,11 +549,20 @@ export function createBot(token: string) {
           return `🕒 ${dayName} ${timeStr}`;
         };
 
+        const minPickConfidence = Math.min(...result.picks.map(p => p.confidence));
+        const minConfPct = Math.round(minPickConfidence * 100);
+        const avgConfPct = Math.round(result.averageConfidence * 100);
+
+        const otherCodes = formatPlatformCodes(result.multiCodes, result.targetBookmaker);
+        const otherCodesBlock = otherCodes
+          ? `\n\n📱 *Also available on other platforms:*\n${otherCodes}`
+          : '';
+
         const msg =
           `🎟️ *Here is your ${result.totalOdds}x High-Probability Slip!*\n` +
           `📌 *Focus:* _${result.marketCategory}_\n` +
           `📅 *Schedule:* *${result.scheduleLabel}*\n\n` +
-          `Built using verified scheduled matches with safe, high-confidence selections (>=70% win rate):\n\n` +
+          `Built using verified scheduled matches — every selection strictly vetted at >=${minConfPct}% win probability (Average: ${avgConfPct}%):\n\n` +
           result.picks
             .map(
               p =>
@@ -561,10 +571,9 @@ export function createBot(token: string) {
             )
             .join('\n\n') +
           `\n\n📊 *Total Odds:* *${result.totalOdds}x*\n` +
-          `🛡️ *Average Win Confidence:* *${(result.averageConfidence * 100).toFixed(0)}% per match*\n\n` +
-          `🎯 *${result.targetBookmaker} Booking Code:* \`${result.bookingCode}\`\n\n` +
-          `📱 *Also available on other platforms:*\n` +
-          formatPlatformCodes(result.multiCodes) +
+          `🛡️ *Average Win Confidence:* *${avgConfPct}% per match*\n\n` +
+          `🎯 *${result.targetBookmaker} Booking Code:* \`${result.bookingCode}\`` +
+          otherCodesBlock +
           `\n\n_Copy your code directly into the app!_`;
 
         await ctx.reply(msg, { parse_mode: 'Markdown' });
