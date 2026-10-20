@@ -13,7 +13,18 @@ export class BetEvaluator {
     leg: BetLeg,
     probs: ModeledProbabilities
   ): ProbabilityAssessment {
-    const trueProb = this.resolveMarketProbability(leg, probs);
+    // Market consensus fair probability derived from live bookmaker odds (removing margin)
+    const marketFairProb = Math.min(0.96, Math.max(0.04, (1 / leg.odds) * 0.945));
+    let trueProb = marketFairProb;
+
+    if (probs) {
+      const modelProb = this.resolveMarketProbability(leg, probs);
+      if (modelProb > 0.05) {
+        // Harmonize statistical model with market consensus fair probability
+        trueProb = Number((0.60 * marketFairProb + 0.40 * modelProb).toFixed(4));
+      }
+    }
+
     const impliedProb = 1 / leg.odds;
     const expectedValue = trueProb * leg.odds - 1;
     const edge = trueProb - impliedProb;

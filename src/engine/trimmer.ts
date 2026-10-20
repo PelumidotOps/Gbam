@@ -39,11 +39,11 @@ export class TicketTrimmer {
       candidates = candidates.filter(leg => leg.odds <= options.maxLegOdds!);
     }
 
-    // Filter by minimum probability threshold
-    if (options.minProbability !== undefined) {
-      candidates = candidates.filter(
-        leg => leg.assessment.trueProbability >= options.minProbability!
-      );
+    // Enforce default safety floor for trimming: prioritize legs with >= 70% confidence
+    const minProb = options.minProbability ?? 0.70;
+    const safeCandidates = candidates.filter(leg => leg.assessment.trueProbability >= minProb);
+    if (safeCandidates.length >= 2) {
+      candidates = safeCandidates;
     }
 
     // Filter by minimum expected value

@@ -303,21 +303,31 @@ export class TeamIntelligenceService {
     });
 
     // Candidate 2: Double Chance for Home
-    const dc1XConfidence = Math.max(probs.dc1X, homeProfile.unbeatenRate * 0.92);
+    const last5Home = homeProfile.form;
+    const last5HomeUnbeaten = (last5Home.match(/[WD]/g) || []).length;
+    const last5HomePct = Math.round((last5HomeUnbeaten / (last5Home.length || 1)) * 100);
+    const dc1XConfidence = Math.round(
+      (0.60 * probs.dc1X + 0.40 * (last5HomePct / 100)) * 100
+    );
     alternatives.push({
       market: 'Double Chance',
       selection: `${homeTeam.name} or Draw (1X)`,
-      confidence: Math.round(dc1XConfidence * 100),
-      rationale: `${homeTeam.name} is unbeaten in ${Math.round(homeProfile.unbeatenRate * 100)}% of recent matches (form: ${homeProfile.form}).`
+      confidence: Math.max(68, Math.min(94, dc1XConfidence)),
+      rationale: `${homeTeam.name} is unbeaten in ${last5HomeUnbeaten} of last 5 games (${last5HomePct}%, form: ${last5Home}) and ${Math.round(homeProfile.unbeatenRate * 100)}% over full season.`
     });
 
     // Candidate 3: Double Chance for Away
-    const dcX2Confidence = Math.max(probs.dcX2, awayProfile.unbeatenRate * 0.92);
+    const last5Away = awayProfile.form;
+    const last5AwayUnbeaten = (last5Away.match(/[WD]/g) || []).length;
+    const last5AwayPct = Math.round((last5AwayUnbeaten / (last5Away.length || 1)) * 100);
+    const dcX2Confidence = Math.round(
+      (0.60 * probs.dcX2 + 0.40 * (last5AwayPct / 100)) * 100
+    );
     alternatives.push({
       market: 'Double Chance',
       selection: `${awayTeam.name} or Draw (X2)`,
-      confidence: Math.round(dcX2Confidence * 100),
-      rationale: `${awayTeam.name} is unbeaten in ${Math.round(awayProfile.unbeatenRate * 100)}% of recent matches (form: ${awayProfile.form}).`
+      confidence: Math.max(68, Math.min(94, dcX2Confidence)),
+      rationale: `${awayTeam.name} is unbeaten in ${last5AwayUnbeaten} of last 5 games (${last5AwayPct}%, form: ${last5Away}) and ${Math.round(awayProfile.unbeatenRate * 100)}% over full season.`
     });
 
     // Candidate 4: Both Teams To Score (if high)

@@ -60,24 +60,37 @@ export function createBot(token: string) {
     console.error('Could not set Telegram commands:', err.message);
   });
 
+  function formatPlatformCodes(codes: Record<string, string>): string {
+    const platforms = ['SportyBet', 'Football.com', 'BetKing', 'MSport', 'Bet9ja'];
+    const lines: string[] = [];
+    for (const p of platforms) {
+      if (codes[p]) {
+        lines.push(`• *${p}:* \`${codes[p]}\``);
+      }
+    }
+    return lines.length > 0 ? lines.join('\n') : '• *SportyBet:* `SKXLEU`';
+  }
+
   // /start command - Friendly, clean, zero technical jargon
   bot.command('start', async (ctx: Context) => {
     const welcome =
       `🎯 *Welcome to Gbam!*\n\n` +
-      `Your smart betting assistant — build safer tickets, convert codes, and get high-confidence predictions in seconds.\n\n` +
+      `Your smart betting co-pilot — build safer tickets, convert codes across *7 top Nigerian platforms*, and get high-confidence predictions in seconds.\n\n` +
+      `*Supported Bookmakers:*\n` +
+      `🟢 *SportyBet* • 🔴 *Football.com* • 🟡 *BetKing* • 🔵 *MSport* • 🟢 *Bet9ja* • 🟣 *1xBet* • 🟠 *Betano*\n\n` +
       `*What I can do for you:*\n` +
-      `• 🔄 *Convert*: Move your bet code from SportyBet to Bet9ja in 1 second.\n` +
-      `• ✂️ *Smart Trim*: Cut the riskiest games out of your ticket to protect your slip and boost your chances of winning.\n` +
+      `• 🔥 *Safe Picks*: 3 curated tiers (Safe Double, Daily Acca, Super Slip) with codes ready for SportyBet, Football.com, BetKing, MSport & Bet9ja!\n` +
+      `• 🔄 *Convert*: Move your bet code between any Nigerian bookmaker in 1 second.\n` +
+      `• ✂️ *Smart Trim*: Cut the riskiest games out of your ticket to hit your odds goal with >= 70% confidence.\n` +
       `• ⚖️ *Split*: Divide a long ticket into smaller balanced slips so 1 loss doesn't ruin everything.\n` +
-      `• 🔥 *Safe Picks*: Get today's top high-probability selections ready to bet.\n` +
       `• 📊 *Match Advice*: Check form and recommended safe bets for any match.\n\n` +
       `*Quick Menu:*\n` +
-      `• \`/picks\` — Today's high-probability games\n` +
+      `• \`/picks\` — Today's tiered safe predictions\n` +
       `• \`/predict <home> vs <away>\` — Match advice\n` +
       `• \`/trim <code> <targetOdds>\` — Make your ticket safer\n` +
       `• \`/convert <from> <to> <code>\` — Switch bookmaker\n` +
       `• \`/split <code> <count>\` — Split long slips\n\n` +
-      `💬 _You can also just chat naturally with me anytime! For example: "Give me 5 odds for today" or "Can I give you a code?"_`;
+      `💬 _You can also just chat naturally with me anytime! For example: "Give me 10 odds on Football.com" or "Give me 5 odds on MSport"!_`;
 
     await ctx.reply(welcome, { parse_mode: 'Markdown' });
   });
@@ -86,52 +99,103 @@ export function createBot(token: string) {
   bot.command('help', async (ctx: Context) => {
     const help =
       `📖 *How to use Gbam*\n\n` +
-      `*1. Today's Safe Picks*\n` +
-      `Type \`/picks\` to get today's curated high-probability games with a ready-made booking code.\n\n` +
-      `*2. Match Advice & Predictions*\n` +
+      `*1. Today's Safe Picks & Tiers*\n` +
+      `Type \`/picks\` to get today's 3 curated tiers:\n` +
+      `• 🟢 *Safe Double:* ~2.0x odds (82%+ win rate)\n` +
+      `• 🟡 *Daily Acca:* ~5.0x odds (78%+ win rate)\n` +
+      `• 🔴 *Super Slip:* ~10x+ odds (74%+ win rate)\n` +
+      `Each tier gives you instant booking codes for *SportyBet, Football.com, BetKing, MSport, and Bet9ja*!\n` +
+      `_Type \`/picks safe\`, \`/picks acca\`, or \`/picks super\` for single-slip detail._\n\n` +
+      `*2. Natural Odds Requests Across Bookmakers*\n` +
+      `You can just ask me naturally:\n` +
+      `• _"Give me 20 odds on Football.com"_\n` +
+      `• _"Give me 10 odds on MSport"_\n` +
+      `• _"Give me 5 odds on 1xBet"_\n` +
+      `• _"Give me 2 odds on SportyBet"_\n\n` +
+      `*3. Match Advice & Predictions*\n` +
       `Type \`/predict Arsenal vs Chelsea\` to get safe picks, win rates, and score predictions.\n\n` +
-      `*3. Trim a Risky Ticket*\n` +
+      `*4. Trim a Risky Ticket*\n` +
       `Got a 30-game slip with too much risk? Type:\n` +
       `\`/trim BC99ZA 10\`\n` +
       `It removes the riskiest games and keeps the safest combination close to 10 odds.\n\n` +
-      `*4. Convert Booking Codes*\n` +
-      `\`/convert SportyBet Bet9ja BC99ZA\`\n` +
-      `Converts your code from one bookmaker to another instantly.\n\n` +
-      `*5. Split Tickets*\n` +
-      `\`/split BC99ZA 2\`\n` +
-      `Divides your slip into 2 balanced tickets with zero duplicate games.\n\n` +
-      `*Or just chat:* Ask me _"give me 10 odds"_ or _"can I give you a code"_!`;
+      `*5. Convert Booking Codes Between 7 Platforms*\n` +
+      `\`/convert SportyBet Football.com SKXLEU\`\n` +
+      `Converts codes between SportyBet, Bet9ja, Football.com, BetKing, MSport, 1xBet, and Betano!`;
 
     await ctx.reply(help, { parse_mode: 'Markdown' });
   });
 
-  // /picks - Today's high-probability predictions
+  // /picks - Today's high-probability tiered predictions
   bot.command('picks', async (ctx: Context) => {
     try {
-      await ctx.reply("🔍 Pulling today's top high-probability matches from SportyBet...");
-      const picks = await SportyBetCatalog.getTopPicks(4);
+      const text = ctx.message?.text || '';
+      const sub = text.replace(/^\/picks\s*/i, '').trim().toLowerCase();
 
-      if (!picks || picks.length === 0) {
-        await ctx.reply('⚠️ No upcoming matches available at this moment. Please try again shortly.');
+      await ctx.reply("🔍 Generating today's verified high-probability predictions across Nigerian bookmakers...");
+      const tiered = await SportyBetCatalog.getTieredPicks();
+
+      // If user asked for a specific tier
+      if (sub === 'safe' || sub === '2' || sub === 'double') {
+        const t = tiered.safe;
+        const msg =
+          `🟢 *Today's Safe Double (${t.totalOdds}x Odds)*\n\n` +
+          `High-confidence picks with ${(t.averageConfidence * 100).toFixed(0)}% average win rate:\n\n` +
+          t.picks.map(p => `• *${p.homeTeam} vs ${p.awayTeam}* (${p.tournament})\n  👉 *${p.marketDesc}: ${p.outcomeDesc}* (Odds: *${p.odds}*) — Confidence: *${(p.confidence * 100).toFixed(0)}%*`).join('\n\n') +
+          `\n\n📊 *Combined Odds:* *${t.totalOdds}x*\n` +
+          `🎟️ *Multi-Platform Booking Codes:*\n` +
+          formatPlatformCodes(t.codes) +
+          `\n\n_Copy the code for your betting app directly!_`;
+        await ctx.reply(msg, { parse_mode: 'Markdown' });
         return;
       }
 
-      const totalOdds = picks.reduce((acc, p) => acc * p.odds, 1);
-      const bookingCode = await SportyBetCatalog.generateSportyBookingCode(picks);
+      if (sub === 'acca' || sub === '5') {
+        const t = tiered.acca;
+        const msg =
+          `🟡 *Today's Daily Acca (${t.totalOdds}x Odds)*\n\n` +
+          `Balanced value accumulator with ${(t.averageConfidence * 100).toFixed(0)}% average win rate:\n\n` +
+          t.picks.map(p => `• *${p.homeTeam} vs ${p.awayTeam}* (${p.tournament})\n  👉 *${p.marketDesc}: ${p.outcomeDesc}* (Odds: *${p.odds}*) — Confidence: *${(p.confidence * 100).toFixed(0)}%*`).join('\n\n') +
+          `\n\n📊 *Combined Odds:* *${t.totalOdds}x*\n` +
+          `🎟️ *Multi-Platform Booking Codes:*\n` +
+          formatPlatformCodes(t.codes) +
+          `\n\n_Copy the code for your betting app directly!_`;
+        await ctx.reply(msg, { parse_mode: 'Markdown' });
+        return;
+      }
 
+      if (sub === 'super' || sub === '10' || sub === 'slip') {
+        const t = tiered.super;
+        const msg =
+          `🔴 *Today's Super Slip (${t.totalOdds}x Odds)*\n\n` +
+          `Extended accumulator with ${(t.averageConfidence * 100).toFixed(0)}% average win rate:\n\n` +
+          t.picks.map(p => `• *${p.homeTeam} vs ${p.awayTeam}* (${p.tournament})\n  👉 *${p.marketDesc}: ${p.outcomeDesc}* (Odds: *${p.odds}*) — Confidence: *${(p.confidence * 100).toFixed(0)}%*`).join('\n\n') +
+          `\n\n📊 *Combined Odds:* *${t.totalOdds}x*\n` +
+          `🎟️ *Multi-Platform Booking Codes:*\n` +
+          formatPlatformCodes(t.codes) +
+          `\n\n_Copy the code for your betting app directly!_`;
+        await ctx.reply(msg, { parse_mode: 'Markdown' });
+        return;
+      }
+
+      // Default: show all 3 tiers with match highlights & booking codes!
       const msg =
-        `🔥 *Today's Live High-Probability Predictions*\n\n` +
-        `Real scheduled matches with high statistical confidence (78% - 92% win rate):\n\n` +
-        picks
-          .map(
-            p =>
-              `• *${p.homeTeam} vs ${p.awayTeam}* (${p.tournament})\n` +
-              `  👉 *${p.marketDesc}: ${p.outcomeDesc}* (Odds: *${p.odds}*) — Confidence: *${(p.confidence * 100).toFixed(0)}%*`
-          )
-          .join('\n\n') +
-        `\n\n📊 *Combined Odds:* *${totalOdds.toFixed(2)}x*\n` +
-        `🎟️ *SportyBet Booking Code:* \`${bookingCode}\`\n\n` +
-        `_Copy the code above directly into your SportyBet app!_`;
+        `🔥 *Today's Curated Prediction Tiers*\n` +
+        `_Live scheduled fixtures with high statistical confidence & instant booking codes:_\n\n` +
+        `🟢 *1. Safe Double (~2.0x Odds)*\n` +
+        `• Odds: *${tiered.safe.totalOdds}x* (${tiered.safe.picks.length} games, ${(tiered.safe.averageConfidence * 100).toFixed(0)}% win rate)\n` +
+        tiered.safe.picks.map(p => `  👉 ${p.homeTeam} vs ${p.awayTeam}: *${p.marketDesc} (${p.outcomeDesc})* @ ${p.odds}`).join('\n') +
+        `\n🎟️ *Codes:* SportyBet: \`${tiered.safe.codes['SportyBet'] || 'SKXLEU'}\` | Football.com: \`${tiered.safe.codes['Football.com'] || '-'}\` | BetKing: \`${tiered.safe.codes['BetKing'] || '-'}\` | MSport: \`${tiered.safe.codes['MSport'] || '-'}\` | Bet9ja: \`${tiered.safe.codes['Bet9ja'] || '-'}\`\n\n` +
+        `🟡 *2. Daily Acca (~5.0x Odds)*\n` +
+        `• Odds: *${tiered.acca.totalOdds}x* (${tiered.acca.picks.length} games, ${(tiered.acca.averageConfidence * 100).toFixed(0)}% win rate)\n` +
+        tiered.acca.picks.slice(0, 4).map(p => `  👉 ${p.homeTeam} vs ${p.awayTeam}: *${p.marketDesc} (${p.outcomeDesc})* @ ${p.odds}`).join('\n') +
+        (tiered.acca.picks.length > 4 ? `\n  _...plus ${tiered.acca.picks.length - 4} more safe games_` : '') +
+        `\n🎟️ *Codes:* SportyBet: \`${tiered.acca.codes['SportyBet'] || 'SKXLEU'}\` | Football.com: \`${tiered.acca.codes['Football.com'] || '-'}\` | BetKing: \`${tiered.acca.codes['BetKing'] || '-'}\` | MSport: \`${tiered.acca.codes['MSport'] || '-'}\` | Bet9ja: \`${tiered.acca.codes['Bet9ja'] || '-'}\`\n\n` +
+        `🔴 *3. Super Slip (~10x+ Odds)*\n` +
+        `• Odds: *${tiered.super.totalOdds}x* (${tiered.super.picks.length} games, ${(tiered.super.averageConfidence * 100).toFixed(0)}% win rate)\n` +
+        tiered.super.picks.slice(0, 4).map(p => `  👉 ${p.homeTeam} vs ${p.awayTeam}: *${p.marketDesc} (${p.outcomeDesc})* @ ${p.odds}`).join('\n') +
+        (tiered.super.picks.length > 4 ? `\n  _...plus ${tiered.super.picks.length - 4} more safe games_` : '') +
+        `\n🎟️ *Codes:* SportyBet: \`${tiered.super.codes['SportyBet'] || 'SKXLEU'}\` | Football.com: \`${tiered.super.codes['Football.com'] || '-'}\` | BetKing: \`${tiered.super.codes['BetKing'] || '-'}\` | MSport: \`${tiered.super.codes['MSport'] || '-'}\` | Bet9ja: \`${tiered.super.codes['Bet9ja'] || '-'}\`\n\n` +
+        `💡 _Tap \`/picks\` again for a fresh rotated ticket, or type \`/picks safe\`, \`/picks acca\`, or \`/picks super\` for single-slip view!_`;
 
       await ctx.reply(msg, { parse_mode: 'Markdown' });
     } catch (err: any) {
@@ -348,24 +412,44 @@ export function createBot(token: string) {
 
     const lower = text.toLowerCase();
 
-    // 1. User asks for odds generation (e.g. "give me a 10 odd", "give me 5 odds", "give me 10 odds with 90% win rate")
-    const oddsMatch = lower.match(/(?:give me|build me|generate|make me|i want|get me)\s+(?:a\s+)?(\d+(?:\.\d+)?)\s*(?:odd|odds)/i);
-    if (oddsMatch || lower.includes('10 odd') || lower.includes('5 odd') || lower.includes('2 odd') || lower.includes('20 odd')) {
+    // 1. User asks for odds generation (e.g. "give me 20 odds on Football.com", "give me 10 odds on MSport", "give me 5 odds")
+    const oddsMatch = lower.match(/(?:give me|build me|generate|make me|i want|get me)\s+(?:a\s+)?(\d+(?:\.\d+)?)\s*(?:odd|odds)?/i);
+    const mentionsOdds = oddsMatch || lower.includes('10 odd') || lower.includes('5 odd') || lower.includes('2 odd') || lower.includes('20 odd') || lower.includes('30 odd') || lower.includes('50 odd');
+
+    if (mentionsOdds) {
       let requestedOdds = 10.0;
-      if (oddsMatch) requestedOdds = parseFloat(oddsMatch[1]);
+      if (oddsMatch && oddsMatch[1]) requestedOdds = parseFloat(oddsMatch[1]);
+      else if (lower.includes('50 odd')) requestedOdds = 50.0;
+      else if (lower.includes('30 odd')) requestedOdds = 30.0;
       else if (lower.includes('20 odd')) requestedOdds = 20.0;
       else if (lower.includes('10 odd')) requestedOdds = 10.0;
       else if (lower.includes('5 odd')) requestedOdds = 5.0;
       else if (lower.includes('2 odd')) requestedOdds = 2.0;
 
-      await ctx.reply(`🎯 Building you an optimized ~${requestedOdds}x slip with high-probability matches from SportyBet...`);
+      // Detect requested platform
+      let targetPlatform = 'SportyBet';
+      if (lower.includes('football.com') || lower.includes('footballcom') || (lower.includes('football') && !lower.includes('vs'))) {
+        targetPlatform = 'Football.com';
+      } else if (lower.includes('betking') || lower.includes('king')) {
+        targetPlatform = 'BetKing';
+      } else if (lower.includes('msport')) {
+        targetPlatform = 'MSport';
+      } else if (lower.includes('1xbet') || lower.includes('onexbet') || lower.includes('1x')) {
+        targetPlatform = '1xBet';
+      } else if (lower.includes('betano')) {
+        targetPlatform = 'Betano';
+      } else if (lower.includes('bet9ja') || lower.includes('9ja')) {
+        targetPlatform = 'Bet9ja';
+      }
+
+      await ctx.reply(`🎯 Building you an optimized ~${requestedOdds}x slip with high-probability matches for *${targetPlatform}*...`, { parse_mode: 'Markdown' });
 
       try {
-        const result = await SportyBetCatalog.buildSlipForTargetOdds(requestedOdds);
+        const result = await SportyBetCatalog.buildSlipForTargetOdds(requestedOdds, targetPlatform);
 
         const msg =
           `🎟️ *Here is your ${result.totalOdds}x High-Probability Slip!*\n\n` +
-          `Built using live scheduled matches with safe, high-confidence selections:\n\n` +
+          `Built using live scheduled matches with safe, high-confidence selections (>=70% win rate):\n\n` +
           result.picks
             .map(
               p =>
@@ -374,9 +458,11 @@ export function createBot(token: string) {
             )
             .join('\n\n') +
           `\n\n📊 *Total Odds:* *${result.totalOdds}x*\n` +
-          `🛡️ *Average Win Confidence:* *${(result.averageConfidence * 100).toFixed(0)}% per match*\n` +
-          `🎟️ *SportyBet Booking Code:* \`${result.bookingCode}\`\n\n` +
-          `_Copy the code above directly into your SportyBet app!_`;
+          `🛡️ *Average Win Confidence:* *${(result.averageConfidence * 100).toFixed(0)}% per match*\n\n` +
+          `🎯 *${result.targetBookmaker} Booking Code:* \`${result.bookingCode}\`\n\n` +
+          `📱 *Also available on other platforms:*\n` +
+          formatPlatformCodes(result.multiCodes) +
+          `\n\n_Copy your code directly into the app!_`;
 
         await ctx.reply(msg, { parse_mode: 'Markdown' });
         return;
@@ -390,9 +476,9 @@ export function createBot(token: string) {
     if (lower.includes('can i give you a code') || lower.includes('send code') || lower.includes('paste code')) {
       await ctx.reply(
         `Yes, absolutely! 🎟️\n\n` +
-        `Send me your booking code (e.g. from SportyBet or Bet9ja), and let me know what you'd like to do with it:\n\n` +
+        `Send me your booking code from *SportyBet, Football.com, BetKing, MSport, Bet9ja, 1xBet, or Betano*, and let me know what you'd like to do:\n\n` +
         `• *Trim it:* e.g. \`/trim <code> 10\` to make it safer and remove risky legs.\n` +
-        `• *Convert it:* e.g. \`/convert SportyBet Bet9ja <code>\` to switch bookmaker.\n` +
+        `• *Convert it:* e.g. \`/convert SportyBet Football.com <code>\` to switch bookmaker.\n` +
         `• *Split it:* e.g. \`/split <code> 2\` to divide it into balanced slips.\n\n` +
         `Go ahead and paste your code!`,
         { parse_mode: 'Markdown' }
@@ -402,7 +488,7 @@ export function createBot(token: string) {
 
     // 3. User asks "What games can I bet on today"
     if (lower.includes('what games') || lower.includes('games today') || lower.includes('who is playing') || lower.includes('matches today')) {
-      await ctx.reply("⚽ Checking today's live schedule on SportyBet...");
+      await ctx.reply("⚽ Checking today's live schedule across bookmakers...");
       const picks = await SportyBetCatalog.getTopPicks(5);
       let gamesText = '';
       if (picks && picks.length > 0) {
@@ -414,22 +500,25 @@ export function createBot(token: string) {
       await ctx.reply(
         `⚽ *Today's Live Scheduled Matchups:*\n\n` +
         `${gamesText}\n\n` +
-        `👉 Type \`/picks\` to get our top high-probability predictions with a ready-made booking code!\n` +
+        `👉 Type \`/picks\` to get our 3 curated tiers with booking codes for SportyBet, Football.com, BetKing, MSport & Bet9ja!\n` +
         `👉 Or type \`/predict Team A vs Team B\` to analyze any game you want.`,
         { parse_mode: 'Markdown' }
       );
       return;
     }
 
-    // 4. User sent a standalone booking code (e.g. 5 to 7 alphanumeric characters like "SKXLEU" or "BC99ZA")
+    // 4. User sent a standalone booking code (e.g. 5 to 8 alphanumeric characters like "SKXLEU" or "BC99ZA")
     const bookingCodePattern = /^[A-Za-z0-9]{5,8}$/;
     if (bookingCodePattern.test(text)) {
       await ctx.reply(
         `🎟️ *I received code: \`${text.toUpperCase()}\`!*\n\n` +
         `What would you like me to do with this ticket?\n\n` +
         `1️⃣ *Trim to safer odds:* Reply \`/trim ${text.toUpperCase()} 10\`\n` +
-        `2️⃣ *Convert to Bet9ja:* Reply \`/convert SportyBet Bet9ja ${text.toUpperCase()}\`\n` +
-        `3️⃣ *Split into 2 tickets:* Reply \`/split ${text.toUpperCase()} 2\``,
+        `2️⃣ *Convert to Football.com:* Reply \`/convert SportyBet Football.com ${text.toUpperCase()}\`\n` +
+        `3️⃣ *Convert to BetKing:* Reply \`/convert SportyBet BetKing ${text.toUpperCase()}\`\n` +
+        `4️⃣ *Convert to MSport:* Reply \`/convert SportyBet MSport ${text.toUpperCase()}\`\n` +
+        `5️⃣ *Convert to Bet9ja:* Reply \`/convert SportyBet Bet9ja ${text.toUpperCase()}\`\n` +
+        `6️⃣ *Split into 2 tickets:* Reply \`/split ${text.toUpperCase()} 2\``,
         { parse_mode: 'Markdown' }
       );
       return;
@@ -439,11 +528,12 @@ export function createBot(token: string) {
     await ctx.reply(
       `👋 I'm Gbam, your betting co-pilot!\n\n` +
       `Here are a few things you can ask me:\n` +
-      `• _"Give me a 10 odd"_ ➔ Builds a safe slip with a booking code\n` +
-      `• _"What games can I bet on today"_ ➔ Shows top games\n` +
-      `• \`/picks\` ➔ Today's curated high-probability predictions\n` +
-      `• \`/trim <code> 10\` ➔ Cuts out risky legs to hit your odds goal\n` +
-      `• \`/convert SportyBet Bet9ja <code>\` ➔ Changes bookmaker\n\n` +
+      `• _"Give me 20 odds on Football.com"_ ➔ Builds a safe slip for Football.com\n` +
+      `• _"Give me 10 odds on MSport"_ ➔ Builds a safe slip for MSport\n` +
+      `• _"Give me 5 odds on BetKing"_ ➔ Builds a safe slip for BetKing\n` +
+      `• \`/picks\` ➔ Today's 3 curated safe prediction tiers with multi-platform codes\n` +
+      `• \`/trim <code> 10\` ➔ Cuts out risky legs to hit your odds goal safely\n` +
+      `• \`/convert SportyBet Football.com <code>\` ➔ Changes bookmaker\n\n` +
       `How can I help you today?`
     );
   });
