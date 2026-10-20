@@ -36,6 +36,8 @@ export interface TieredPicksResult {
 
 export class SportyBetCatalog {
   private static pool: Map<string, SportyMatchOutcome> = new Map();
+  private static rawEvents: Map<string, any> = new Map();
+  private static eventDetailsCache: Map<string, { timestamp: number; data: any }> = new Map();
   private static lastRefresh = 0;
   private static rotationOffset = 0;
 
@@ -81,6 +83,9 @@ export class SportyBetCatalog {
     for (const o of outcomes) {
       // Only include matches that haven't started or ended yet
       if (o.status !== 0 && o.matchStatus !== 'Not start') continue;
+      if (o.eventId) {
+        this.rawEvents.set(o.eventId, o);
+      }
 
       const market = o.markets?.[0];
       const outcome = market?.outcomes?.[0];
@@ -171,9 +176,10 @@ export class SportyBetCatalog {
     } else if (outcome.marketId === '1') {
       marketType = 'MATCH_RESULT';
       if (outcome.outcomeId === '1' || selection.toLowerCase().includes('home')) selection = 'HOME';
-      else if (outcome.outcomeId === '2' || selection.toLowerCase().includes('away')) selection = 'AWAY';
+      else if (outcome.outcomeId === '3' || selection.toLowerCase().includes('away')) selection = 'AWAY';
       else selection = 'DRAW';
     }
+
 
     return {
       fixture: {
@@ -357,8 +363,212 @@ export class SportyBetCatalog {
   }
 
   /**
+   * Fetches full event markets from SportyBet factsCenter API, caching for 30 minutes
+   */
+  public static async fetchEventDetails(eventId: string): Promise<any | null> {
+    const cached = this.eventDetailsCache.get(eventId);
+    const now = Date.now();
+    if (cached && now - cached.timestamp < 30 * 60 * 1000) {
+      return cached.data;
+    }
+
+    try {
+      const res = await fetch(`https://www.sportybet.com/api/ng/factsCenter/event?eventId=${eventId}`, {
+        headers: {
+          'User-Agent':
+            'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+          Accept: 'application/json'
+        }
+      });
+      if (res.ok) {
+        const json = (await res.json()) as any;
+        if (json.bizCode === 10000 && json.data) {
+          this.eventDetailsCache.set(eventId, { timestamp: now, data: json.data });
+          return json.data;
+        }
+      }
+    } catch (err: any) {
+      console.error(`Failed to fetch details for event ${eventId}:`, err.message);
+    }
+    return null;
+  }
+
+  /**
+   * Extracts strictly matching market outcomes directly from live scheduled matches
+   * Guarantees 100% adherence to the requested market type without cross-market pollution.
+   */
+  public static async getStrictMarketOutcomes(
+    marketFilter: string,
+    maxEvents: number = 30
+  ): Promise<SportyMatchOutcome[]> {
+    await this.refreshCatalog();
+
+    // Collect upcoming event IDs
+    let eventIds: string[] = Array.from(this.rawEvents.keys());
+    if (eventIds.length === 0) {
+      eventIds = Array.from(this.pool.keys());
+    }
+    const targetEventIds = eventIds.slice(0, maxEvents);
+
+    // Fetch full event markets concurrently
+    const events = await Promise.all(targetEventIds.map(id => this.fetchEventDetails(id)));
+
+    const mf = marketFilter.toUpperCase();
+    const results: SportyMatchOutcome[] = [];
+
+    for (const ev of events) {
+      if (!ev || !ev.markets || !Array.isArray(ev.markets)) continue;
+
+      let matchedMarket: any = null;
+      let matchedOutcome: any = null;
+      let marketDesc = 'Market';
+      let outcomeDesc = 'Selection';
+
+      if (mf === 'HOME_OR_AWAY' || mf === '12') {
+        const dc = ev.markets.find((m: any) => String(m.id) === '10');
+        const o = dc?.outcomes?.find((out: any) => String(out.id) === '10');
+        if (o && parseFloat(o.odds) > 1.0) {
+          matchedMarket = { id: '10', specifier: '' };
+          matchedOutcome = o;
+          marketDesc = 'Double Chance';
+          outcomeDesc = 'Home or Away';
+        }
+      } else if (mf === 'HOME_OR_DRAW' || mf === '1X') {
+        const dc = ev.markets.find((m: any) => String(m.id) === '10');
+        const o = dc?.outcomes?.find((out: any) => String(out.id) === '9');
+        if (o && parseFloat(o.odds) > 1.0) {
+          matchedMarket = { id: '10', specifier: '' };
+          matchedOutcome = o;
+          marketDesc = 'Double Chance';
+          outcomeDesc = 'Home or Draw';
+        }
+      } else if (mf === 'DRAW_OR_AWAY' || mf === 'X2') {
+        const dc = ev.markets.find((m: any) => String(m.id) === '10');
+        const o = dc?.outcomes?.find((out: any) => String(out.id) === '11');
+        if (o && parseFloat(o.odds) > 1.0) {
+          matchedMarket = { id: '10', specifier: '' };
+          matchedOutcome = o;
+          marketDesc = 'Double Chance';
+          outcomeDesc = 'Draw or Away';
+        }
+      } else if (mf === 'DOUBLE_CHANCE') {
+        const dc = ev.markets.find((m: any) => String(m.id) === '10');
+        const validOuts = (dc?.outcomes || []).filter((out: any) => parseFloat(out.odds) > 1.0);
+        validOuts.sort((a: any, b: any) => parseFloat(a.odds) - parseFloat(b.odds));
+        if (validOuts.length > 0) {
+          matchedMarket = { id: '10', specifier: '' };
+          matchedOutcome = validOuts[0];
+          marketDesc = 'Double Chance';
+          outcomeDesc = matchedOutcome.desc || 'Double Chance';
+        }
+      } else if (mf === 'OVER_1_5') {
+        const ov = ev.markets.find((m: any) => String(m.id) === '18' && (m.specifier || '').includes('1.5'));
+        const o = ov?.outcomes?.find((out: any) => String(out.id) === '12');
+        if (o && parseFloat(o.odds) > 1.0) {
+          matchedMarket = { id: '18', specifier: 'total=1.5' };
+          matchedOutcome = o;
+          marketDesc = 'Over/Under';
+          outcomeDesc = 'Over 1.5';
+        }
+      } else if (mf === 'OVER_2_5') {
+        const ov = ev.markets.find((m: any) => String(m.id) === '18' && (m.specifier || '').includes('2.5'));
+        const o = ov?.outcomes?.find((out: any) => String(out.id) === '12');
+        if (o && parseFloat(o.odds) > 1.0) {
+          matchedMarket = { id: '18', specifier: 'total=2.5' };
+          matchedOutcome = o;
+          marketDesc = 'Over/Under';
+          outcomeDesc = 'Over 2.5';
+        }
+      } else if (mf === 'UNDER_3_5') {
+        const un = ev.markets.find((m: any) => String(m.id) === '18' && (m.specifier || '').includes('3.5'));
+        const o = un?.outcomes?.find((out: any) => String(out.id) === '13');
+        if (o && parseFloat(o.odds) > 1.0) {
+          matchedMarket = { id: '18', specifier: 'total=3.5' };
+          matchedOutcome = o;
+          marketDesc = 'Over/Under';
+          outcomeDesc = 'Under 3.5';
+        }
+      } else if (mf === 'UNDER_2_5') {
+        const un = ev.markets.find((m: any) => String(m.id) === '18' && (m.specifier || '').includes('2.5'));
+        const o = un?.outcomes?.find((out: any) => String(out.id) === '13');
+        if (o && parseFloat(o.odds) > 1.0) {
+          matchedMarket = { id: '18', specifier: 'total=2.5' };
+          matchedOutcome = o;
+          marketDesc = 'Over/Under';
+          outcomeDesc = 'Under 2.5';
+        }
+      } else if (mf === 'UNDER_0_5' || mf === 'NO_GOAL') {
+        const un = ev.markets.find((m: any) => String(m.id) === '18' && (m.specifier || '').includes('0.5'));
+        const o = un?.outcomes?.find((out: any) => String(out.id) === '13');
+        if (o && parseFloat(o.odds) > 1.0) {
+          matchedMarket = { id: '18', specifier: 'total=0.5' };
+          matchedOutcome = o;
+          marketDesc = 'Over/Under';
+          outcomeDesc = 'Under 0.5';
+        }
+      } else if (mf === 'BTTS' || mf === 'GG') {
+        const gg = ev.markets.find((m: any) => String(m.id) === '29');
+        const o = gg?.outcomes?.find((out: any) => String(out.id) === '74');
+        if (o && parseFloat(o.odds) > 1.0) {
+          matchedMarket = { id: '29', specifier: '' };
+          matchedOutcome = o;
+          marketDesc = 'Both Teams to Score';
+          outcomeDesc = 'Yes';
+        }
+      } else if (mf === 'MATCH_RESULT' || mf === '1X2') {
+        const mr = ev.markets.find((m: any) => String(m.id) === '1');
+        const h = mr?.outcomes?.find((out: any) => String(out.id) === '1');
+        const a = mr?.outcomes?.find((out: any) => String(out.id) === '3');
+        const fav = h && a ? (parseFloat(h.odds) <= parseFloat(a.odds) ? h : a) : h || a;
+        if (fav && parseFloat(fav.odds) > 1.0) {
+          matchedMarket = { id: '1', specifier: '' };
+          matchedOutcome = fav;
+          marketDesc = '1X2';
+          outcomeDesc = fav.desc || (fav.id === '1' ? 'Home' : 'Away');
+        }
+      } else if (mf === 'HANDICAP') {
+        const hc = ev.markets.find((m: any) => String(m.id) === '14' && (m.specifier || '').includes('0:2'));
+        const o = hc?.outcomes?.find((out: any) => String(out.id) === '1713');
+        if (o && parseFloat(o.odds) > 1.0) {
+          matchedMarket = { id: '14', specifier: hc.specifier };
+          matchedOutcome = o;
+          marketDesc = hc.desc || 'Handicap';
+          outcomeDesc = o.desc || 'Away (0:2)';
+        }
+      }
+
+      if (matchedMarket && matchedOutcome) {
+        const odds = parseFloat(matchedOutcome.odds);
+        let confidence = (1 / odds) * 0.945;
+        if (matchedOutcome.probability) {
+          confidence = parseFloat(matchedOutcome.probability);
+        }
+        confidence = Math.min(0.95, Math.max(0.65, confidence));
+
+        results.push({
+          eventId: ev.eventId,
+          homeTeam: ev.homeTeamName || 'Home Team',
+          awayTeam: ev.awayTeamName || 'Away Team',
+          tournament: ev.sport?.category?.tournament?.name || 'Football',
+          category: ev.sport?.category?.name || 'Soccer',
+          marketId: matchedMarket.id,
+          marketDesc,
+          specifier: matchedMarket.specifier,
+          outcomeId: String(matchedOutcome.id),
+          outcomeDesc,
+          odds,
+          confidence,
+          estimateStartTime: ev.estimateStartTime
+        });
+      }
+    }
+
+    return results;
+  }
+
+  /**
    * Builds an optimized slip targeting specific odds using real matches with multi-bookmaker codes.
-   * Uses 100% genuine live market odds, real eventIds, and real outcomeIds directly from the live feed.
+   * Strictly enforces the requested market without mixing unrelated bet types.
    */
   public static async buildSlipForTargetOdds(
     targetOdds: number = 10.0,
@@ -373,85 +583,48 @@ export class SportyBetCatalog {
     marketCategory: string;
     multiCodes: Record<string, string>;
   }> {
-    await this.refreshCatalog();
-    const all = Array.from(this.pool.values());
-
-    // Rotate candidate window for fresh slips upon repeated requests
-    const step = (this.rotationOffset * 2) % Math.max(1, all.length);
-    this.rotationOffset = (this.rotationOffset + 2) % 35;
-    const rotated = [...all.slice(step), ...all.slice(0, step)];
-
-    // Enforce safety floor: minimum 70% confidence
-    const safePool = rotated.filter(m => m.confidence >= 0.70);
-    const pool = safePool.length >= 4 ? safePool : rotated;
-
-    // Filter candidates if a specific market is requested
-    let primaryCandidates: SportyMatchOutcome[] = [];
-    let secondaryCandidates: SportyMatchOutcome[] = [];
+    let candidates: SportyMatchOutcome[] = [];
     let marketCategory = 'Platform High-Win-Rate Signature Markets';
 
     if (marketFilter) {
-      const mf = marketFilter.toUpperCase();
+      // 100% STRICT MARKET FILTERING: Only extract matches that belong to this market!
+      candidates = await this.getStrictMarketOutcomes(marketFilter);
 
-      if (mf === 'OVER_1_5') {
-        marketCategory = 'Over 1.5 Goals Focused';
-        primaryCandidates = pool.filter(
-          m => (m.marketId === '18' || m.marketId === '19') && (m.specifier.includes('1.5') || m.outcomeDesc.includes('1.5'))
-        );
-      } else if (mf === 'OVER_2_5') {
-        marketCategory = 'Over 2.5 Goals Focused';
-        primaryCandidates = pool.filter(
-          m => m.marketId === '18' && (m.specifier.includes('2.5') || m.outcomeDesc.includes('2.5'))
-        );
-      } else if (mf === 'DOUBLE_CHANCE') {
-        marketCategory = 'Double Chance Focused';
-        primaryCandidates = pool.filter(
-          m => m.marketId === '10' || m.marketDesc.toLowerCase().includes('double chance')
-        );
-      } else if (mf === 'HOME_OR_DRAW' || mf === '1X') {
-        marketCategory = 'Home or Draw (1X) Focused';
-        primaryCandidates = pool.filter(
-          m => (m.marketId === '10' || m.marketDesc.toLowerCase().includes('double chance')) &&
-               (m.outcomeDesc.toLowerCase().includes('home') || m.outcomeDesc.includes('1X'))
-        );
-      } else if (mf === 'HOME_OR_AWAY' || mf === '12') {
-        marketCategory = 'Home or Away (12) Focused';
-        primaryCandidates = pool.filter(
-          m => (m.marketId === '10' || m.marketDesc.toLowerCase().includes('double chance')) &&
-               (m.outcomeDesc.includes('12') || m.outcomeDesc.toLowerCase().includes('home or away'))
-        );
-      } else if (mf === 'HANDICAP') {
-        marketCategory = 'Handicap Cushions Focused';
-        primaryCandidates = pool.filter(
-          m => m.marketId === '14' || m.marketDesc.toLowerCase().includes('handicap')
-        );
-      } else if (mf === 'MATCH_RESULT') {
-        marketCategory = 'Straight Win / Favorites Focused';
-        primaryCandidates = pool.filter(
-          m => m.marketId === '1' || m.marketId === '60200'
-        );
-      } else if (mf === 'BTTS' || mf === 'GG') {
-        marketCategory = 'Both Teams To Score Focused';
-        primaryCandidates = pool.filter(
-          m => m.marketId === '29' || m.marketDesc.toLowerCase().includes('score')
+      const mf = marketFilter.toUpperCase();
+      if (mf === 'HOME_OR_AWAY' || mf === '12') marketCategory = 'Home or Away (12) Focused';
+      else if (mf === 'HOME_OR_DRAW' || mf === '1X') marketCategory = 'Home or Draw (1X) Focused';
+      else if (mf === 'DRAW_OR_AWAY' || mf === 'X2') marketCategory = 'Draw or Away (X2) Focused';
+      else if (mf === 'DOUBLE_CHANCE') marketCategory = 'Double Chance Focused';
+      else if (mf === 'OVER_1_5') marketCategory = 'Over 1.5 Goals Focused';
+      else if (mf === 'OVER_2_5') marketCategory = 'Over 2.5 Goals Focused';
+      else if (mf === 'UNDER_3_5') marketCategory = 'Under 3.5 Goals Focused';
+      else if (mf === 'UNDER_2_5') marketCategory = 'Under 2.5 Goals Focused';
+      else if (mf === 'BTTS' || mf === 'GG') marketCategory = 'Both Teams To Score Focused';
+      else if (mf === 'MATCH_RESULT') marketCategory = 'Straight Win / Favorites Focused';
+      else if (mf === 'HANDICAP') marketCategory = 'Handicap Cushions Focused';
+      else marketCategory = `${marketFilter} Focused`;
+
+      if (candidates.length === 0) {
+        throw new Error(
+          `No live scheduled matches currently offer "${marketCategory}" with verified high confidence. Please choose another market type or try a general odds request.`
         );
       }
-
-      // Secondary pool has remaining safe matches in case primary matches alone don't reach targetOdds
-      const primaryEventIds = new Set(primaryCandidates.map(p => p.eventId));
-      secondaryCandidates = pool.filter(m => !primaryEventIds.has(m.eventId));
     } else {
+      // General odds request across bookmakers
+      await this.refreshCatalog();
+      const all = Array.from(this.pool.values());
+      const step = (this.rotationOffset * 2) % Math.max(1, all.length);
+      this.rotationOffset = (this.rotationOffset + 2) % 35;
+      const rotated = [...all.slice(step), ...all.slice(0, step)];
+      const safePool = rotated.filter(m => m.confidence >= 0.70);
+      candidates = safePool.length >= 4 ? safePool : rotated;
+
       const resolvedAdapter = BookmakerRegistry.get(preferredBookmaker);
       marketCategory = `${resolvedAdapter.name} Signature Advantage Markets`;
-      primaryCandidates = pool;
     }
 
-    // Sort by highest confidence first
-    primaryCandidates.sort((a, b) => b.confidence - a.confidence || a.odds - b.odds);
-    secondaryCandidates.sort((a, b) => b.confidence - a.confidence || a.odds - b.odds);
-
-    // Combine candidates: primary filtered matches first, then secondary safe matches to reach targetOdds
-    const candidates = [...primaryCandidates, ...secondaryCandidates];
+    // Sort by highest confidence first, then safest odds
+    candidates.sort((a, b) => b.confidence - a.confidence || a.odds - b.odds);
 
     const selected: SportyMatchOutcome[] = [];
     const usedEvents = new Set<string>();
@@ -470,6 +643,7 @@ export class SportyBetCatalog {
         }
       }
     }
+
 
     const avgConfidence =
       selected.reduce((acc, m) => acc + m.confidence, 0) / (selected.length || 1);

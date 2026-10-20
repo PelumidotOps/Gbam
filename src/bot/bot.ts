@@ -467,15 +467,23 @@ export function createBot(token: string) {
       } else if (lower.includes('under 0.5') || lower.includes('no goal') || lower.includes('under 05')) {
         marketFilter = 'UNDER_0_5';
         marketLabel = '1st 15 Mins No Goal';
-      } else if (lower.includes('home or away') || lower.includes('home and away') || lower.includes('12')) {
+      } else if (
+        lower.includes('home or away') ||
+        lower.includes('home and away') ||
+        lower.includes('omo away') ||
+        (/\b12\b/.test(lower) && !/\b12\s*odd/.test(lower))
+      ) {
         marketFilter = 'HOME_OR_AWAY';
         marketLabel = 'Home or Away (12)';
-      } else if (lower.includes('home or draw') || lower.includes('home and draw') || lower.includes('1x')) {
+      } else if (lower.includes('home or draw') || lower.includes('home and draw') || lower.includes(' 1x') || lower.includes('1x ')) {
         marketFilter = 'HOME_OR_DRAW';
         marketLabel = 'Home or Draw (1X)';
-      } else if (lower.includes('draw or away') || lower.includes('away or draw') || lower.includes('x2')) {
+      } else if (lower.includes('draw or away') || lower.includes('away or draw') || lower.includes(' x2') || lower.includes('x2 ')) {
         marketFilter = 'DRAW_OR_AWAY';
         marketLabel = 'Draw or Away (X2)';
+      } else if (lower.includes('straight win') || lower.includes('direct win') || lower.includes('1x2') || lower.includes('moneyline')) {
+        marketFilter = 'MATCH_RESULT';
+        marketLabel = 'Straight Win / Favorites';
       } else if (lower.includes('double chance') || lower.includes('dc')) {
         marketFilter = 'DOUBLE_CHANCE';
         marketLabel = 'Double Chance';
@@ -489,6 +497,7 @@ export function createBot(token: string) {
         marketFilter = 'WIN_EITHER_HALF';
         marketLabel = 'Win Either Half';
       }
+
 
       const statusText = marketLabel
         ? `🎯 Building you an optimized ~${requestedOdds}x slip specializing in *${marketLabel}* for *${targetPlatform}*...`
