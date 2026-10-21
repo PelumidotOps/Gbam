@@ -196,7 +196,27 @@ export function createBot(token: string) {
   // /start command
   bot.command('start', async (ctx: Context) => {
     const userId = ctx.from?.id;
-    const status = userId ? subscriptionService.isUserActive(userId) : { active: false };
+    let status = userId ? subscriptionService.isUserActive(userId) : { active: false };
+
+    // Auto-check Paystack if not active in local DB
+    if (userId && !status.active && !subscriptionService.isAdmin(userId)) {
+      try {
+        const paystackCheck = await paystackService.findLatestValidCustomerPayment(userId);
+        if (paystackCheck.found && paystackCheck.days) {
+          subscriptionService.activateUser({
+            telegramId: userId,
+            username: ctx.from?.username,
+            fullName: [ctx.from?.first_name, ctx.from?.last_name].filter(Boolean).join(' '),
+            days: paystackCheck.days,
+            plan: `VIP (${paystackCheck.planId || 'Standard'})`,
+            paymentReference: paystackCheck.reference
+          });
+          status = subscriptionService.isUserActive(userId);
+        }
+      } catch (err: any) {
+        console.error('[Start] Error checking Paystack fallback:', err.message);
+      }
+    }
 
     let statusLine = '';
     if (userId && subscriptionService.isAdmin(userId)) {
@@ -291,7 +311,26 @@ export function createBot(token: string) {
       return;
     }
 
-    const check = subscriptionService.isUserActive(userId);
+    let check = subscriptionService.isUserActive(userId);
+    if (!check.active) {
+      try {
+        const paystackCheck = await paystackService.findLatestValidCustomerPayment(userId);
+        if (paystackCheck.found && paystackCheck.days) {
+          subscriptionService.activateUser({
+            telegramId: userId,
+            username: ctx.from?.username,
+            fullName: [ctx.from?.first_name, ctx.from?.last_name].filter(Boolean).join(' '),
+            days: paystackCheck.days,
+            plan: `VIP (${paystackCheck.planId || 'Standard'})`,
+            paymentReference: paystackCheck.reference
+          });
+          check = subscriptionService.isUserActive(userId);
+        }
+      } catch (err: any) {
+        console.error('[Status] Error checking Paystack fallback:', err.message);
+      }
+    }
+
     if (!check.active) {
       const expiredMsg = check.reason === 'EXPIRED'
         ? `⏰ *Your VIP subscription has expired.*\n\nRenew now to continue accessing predictions and booking codes:`
@@ -656,6 +695,26 @@ export function createBot(token: string) {
       const check = subscriptionService.isUserActive(userId);
       if (check.active) {
         return next();
+      }
+
+      // Auto-fallback check: check Paystack API directly before showing lock screen
+      try {
+        const paystackCheck = await paystackService.findLatestValidCustomerPayment(userId);
+        if (paystackCheck.found && paystackCheck.days) {
+          subscriptionService.activateUser({
+            telegramId: userId,
+            username: ctx.from?.username,
+            fullName: [ctx.from?.first_name, ctx.from?.last_name].filter(Boolean).join(' '),
+            days: paystackCheck.days,
+            plan: `VIP (${paystackCheck.planId || 'Standard'})`,
+            paymentReference: paystackCheck.reference
+          });
+          console.log(`[Gatekeeper] Auto-unlocked user ${userId} (@${ctx.from?.username}) via Paystack verification.`);
+          await ctx.reply(`🎉 *Payment Verified!* Your VIP subscription is active (${paystackCheck.days} days).`, { parse_mode: 'Markdown' }).catch(() => {});
+          return next();
+        }
+      } catch (err: any) {
+        console.error('[Gatekeeper] Error checking Paystack fallback:', err.message);
       }
     }
 

@@ -223,4 +223,69 @@ export class PaystackService {
       };
     }
   }
+
+  /**
+   * Look up recent successful transactions on Paystack for a telegram user
+   * Returns transaction details if a valid unexpired transaction is found.
+   */
+  public async findLatestValidCustomerPayment(telegramId: number): Promise<{
+    found: boolean;
+    reference?: string;
+    planId?: string;
+    days?: number;
+    amountNgn?: number;
+    paidAt?: string;
+    expiresAt?: string;
+  }> {
+    if (!this.isConfigured()) return { found: false };
+
+    try {
+      const response = await fetch('https://api.paystack.co/transaction?perPage=50', {
+        method: 'GET',
+        headers: {
+          Authorization: `Bearer ${this.secretKey}`,
+        },
+      });
+
+      const res = (await response.json()) as any;
+      if (!response.ok || !res.status || !Array.isArray(res.data)) {
+        return { found: false };
+      }
+
+      const now = Date.now();
+      const targetIdStr = String(telegramId);
+
+      for (const tx of res.data) {
+        if (tx.status !== 'success') continue;
+
+        const metaId = tx.metadata?.telegramId ? String(tx.metadata.telegramId) : '';
+        const email = tx.customer?.email || '';
+        const isMatch = metaId === targetIdStr || email.includes(`_${targetIdStr}@`);
+
+        if (isMatch && tx.paid_at) {
+          const days = Number(tx.metadata?.days) || 7;
+          const paidTime = new Date(tx.paid_at).getTime();
+          const expiryTime = paidTime + days * 24 * 60 * 60 * 1000;
+
+          if (expiryTime > now) {
+            return {
+              found: true,
+              reference: tx.reference,
+              planId: tx.metadata?.planId || '1_week',
+              days,
+              amountNgn: (tx.amount || 0) / 100,
+              paidAt: tx.paid_at,
+              expiresAt: new Date(expiryTime).toISOString(),
+            };
+          }
+        }
+      }
+
+      return { found: false };
+    } catch (err: any) {
+      console.error('[PaystackService] findLatestValidCustomerPayment error:', err);
+      return { found: false };
+    }
+  }
 }
+
