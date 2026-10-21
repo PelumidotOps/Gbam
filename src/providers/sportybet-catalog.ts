@@ -675,25 +675,25 @@ export class SportyBetCatalog {
     // Shift candidate list to provide dynamic variety upon repeated clicks
     const rotated = [...sorted.slice(step), ...sorted.slice(0, step)];
 
-    // 1. Build Safe Double (2-4 games, target ~2.0x odds, minConfidence >= 0.78)
+    // 1. Build Safe Double (2-5 games, target ~2.0x odds, minConfidence >= 0.78)
     const safeCandidates = rotated.filter(m => m.confidence >= 0.78);
-    const safePicks = this.selectCombinatorialPicks(safeCandidates, 2.0, 2, 4);
+    const safePicks = this.selectCombinatorialPicks(safeCandidates, 2.0, 2, 5);
     const safeTotalOdds = Number(safePicks.reduce((acc, p) => acc * p.odds, 1).toFixed(2));
     const safeAvgConf = safePicks.reduce((acc, p) => acc + p.confidence, 0) / (safePicks.length || 1);
     const safeLegs = safePicks.map(p => this.toBetLeg(p));
     const safeCodes = await BookmakerRegistry.getMultiBookingCodes(safeLegs);
 
-    // 2. Build Daily Acca (4-8 games, target ~5.0x odds, minConfidence >= 0.75)
+    // 2. Build Daily Acca (4-10 games, target ~5.0x odds, minConfidence >= 0.75)
     const accaCandidates = rotated.filter(m => m.confidence >= 0.75);
-    const accaPicks = this.selectCombinatorialPicks(accaCandidates, 5.0, 4, 8);
+    const accaPicks = this.selectCombinatorialPicks(accaCandidates, 5.0, 4, 10);
     const accaTotalOdds = Number(accaPicks.reduce((acc, p) => acc * p.odds, 1).toFixed(2));
     const accaAvgConf = accaPicks.reduce((acc, p) => acc + p.confidence, 0) / (accaPicks.length || 1);
     const accaLegs = accaPicks.map(p => this.toBetLeg(p));
     const accaCodes = await BookmakerRegistry.getMultiBookingCodes(accaLegs);
 
-    // 3. Build Super Slip (8-14 games, target ~10.0x+ odds, minConfidence >= 0.72)
+    // 3. Build Super Slip (7-16 games, target ~10.0x+ odds, minConfidence >= 0.72)
     const superCandidates = rotated.filter(m => m.confidence >= 0.72);
-    const superPicks = this.selectCombinatorialPicks(superCandidates, 10.0, 7, 14);
+    const superPicks = this.selectCombinatorialPicks(superCandidates, 10.0, 7, 16);
     const superTotalOdds = Number(superPicks.reduce((acc, p) => acc * p.odds, 1).toFixed(2));
     const superAvgConf = superPicks.reduce((acc, p) => acc + p.confidence, 0) / (superPicks.length || 1);
     const superLegs = superPicks.map(p => this.toBetLeg(p));
@@ -739,12 +739,21 @@ export class SportyBetCatalog {
     minLegs: number,
     maxLegs: number
   ): SportyMatchOutcome[] {
-    const usedEvents = new Set<string>();
-    const unique = candidates.filter(m => {
-      if (usedEvents.has(m.eventId)) return false;
-      usedEvents.add(m.eventId);
-      return true;
-    });
+    const getMatchKey = (home: string, away: string) => {
+      const clean = (s: string) => (s || '').toLowerCase()
+        .replace(/\b(fc|cf|sc|afc|club|united|city|town)\b/gi, '')
+        .replace(/[^a-z0-9]/g, '');
+      return `${clean(home)}_vs_${clean(away)}`;
+    };
+
+    const usedMatches = new Set<string>();
+    const unique: SportyMatchOutcome[] = [];
+    for (const m of candidates) {
+      const key = getMatchKey(m.homeTeam, m.awayTeam);
+      if (usedMatches.has(key)) continue;
+      usedMatches.add(key);
+      unique.push(m);
+    }
 
     if (unique.length === 0) return [];
 
@@ -752,43 +761,70 @@ export class SportyBetCatalog {
     let bestDiff = Infinity;
 
     // Search window among available candidates
-    const pool = unique.slice(0, Math.min(unique.length, 18));
+    const pool = unique.slice(0, Math.min(unique.length, 25));
+
+    const getMarketCategory = (marketId: string, desc: string, outcomeDesc: string): string => {
+      const text = `${desc} ${outcomeDesc}`.toLowerCase();
+      if (marketId === '10' || text.includes('double chance') || text.includes('home or away') || text.includes('1x') || text.includes('x2') || text.includes('12')) return 'DOUBLE_CHANCE';
+      if (marketId === '18' || text.includes('over') || text.includes('under') || text.includes('goals')) return 'OVER_UNDER';
+      if (marketId === '1' || text.includes('1x2') || outcomeDesc.toLowerCase() === 'home' || outcomeDesc.toLowerCase() === 'away') return '1X2';
+      if (marketId === '14' || text.includes('handicap')) return 'HANDICAP';
+      if (marketId === '29' || text.includes('btts') || text.includes('both teams')) return 'BTTS';
+      return 'OTHER';
+    };
+
+    const maxPerCat = Math.max(1, Math.ceil(maxLegs * 0.35));
 
     for (let i = 0; i < pool.length; i++) {
       let currentOdds = pool[i].odds;
       const currentCombo: SportyMatchOutcome[] = [pool[i]];
+      const catCounts: Record<string, number> = {};
+      const firstCat = getMarketCategory(pool[i].marketId, pool[i].marketDesc, pool[i].outcomeDesc);
+      catCounts[firstCat] = 1;
 
       for (let j = i + 1; j < pool.length; j++) {
         if (currentCombo.length >= maxLegs) break;
 
-        currentCombo.push(pool[j]);
-        currentOdds *= pool[j].odds;
+        const candidate = pool[j];
+        const cat = getMarketCategory(candidate.marketId, candidate.marketDesc, candidate.outcomeDesc);
+        if ((catCounts[cat] || 0) >= maxPerCat && currentCombo.length >= 2 && currentOdds >= targetOdds * 0.85) {
+          continue; // Respect diversity cap once target odds range is feasible
+        }
+
+        currentCombo.push(candidate);
+        catCounts[cat] = (catCounts[cat] || 0) + 1;
+        currentOdds *= candidate.odds;
 
         if (currentCombo.length >= minLegs) {
           const diff = Math.abs(currentOdds - targetOdds);
-          if (diff < bestDiff) {
+          if (diff < bestDiff && currentOdds >= targetOdds * 0.75) {
             bestDiff = diff;
             bestSubset = [...currentCombo];
           }
-          if (currentOdds >= targetOdds * 0.92 && currentOdds <= targetOdds * 1.35) {
-            return bestSubset;
+          if (currentOdds >= targetOdds * 0.88 && currentOdds <= targetOdds * 1.40) {
+            return [...currentCombo];
           }
         }
       }
     }
 
-    if (bestSubset.length >= minLegs) {
+    if (bestSubset.length >= minLegs && bestSubset.reduce((acc, p) => acc * p.odds, 1) >= targetOdds * 0.75) {
       return bestSubset;
     }
 
-    // Fallback: greedy accumulation
+    // Fallback: greedy accumulation with unique match keys
     const fallback: SportyMatchOutcome[] = [];
+    const fallbackMatches = new Set<string>();
     let curr = 1.0;
     for (const m of unique) {
+      const key = getMatchKey(m.homeTeam, m.awayTeam);
+      if (fallbackMatches.has(key)) continue;
+      fallbackMatches.add(key);
       fallback.push(m);
       curr *= m.odds;
-      if (curr >= targetOdds * 0.90 && fallback.length >= minLegs) break;
-      if (fallback.length >= maxLegs) break;
+      if (curr >= targetOdds * 0.85 && fallback.length >= minLegs) break;
+      if (fallback.length >= maxLegs && curr >= targetOdds * 0.75) break;
+      if (fallback.length >= maxLegs + 4) break;
     }
     return fallback;
   }
@@ -1109,8 +1145,9 @@ export class SportyBetCatalog {
 
       const eventOptions: SportyMatchOutcome[] = [];
 
-      // 1. Double Chance (Market 10: 1X, 12, X2) - Strictly >= 75% confidence, odds >= 1.15
+      // 1. Double Chance (Market 10: 1X, 12, X2) - Strictly >= 78% confidence, top outcome only
       const dc = ev.markets.find((m: any) => String(m.id) === '10');
+      let bestDc: SportyMatchOutcome | null = null;
       for (const o of dc?.outcomes || []) {
         const odds = parseFloat(o.odds);
         if (isNaN(odds) || odds < 1.15 || odds > 1.45) continue;
@@ -1118,8 +1155,8 @@ export class SportyBetCatalog {
         if (String(o.id) === '10') modelProb = probs.dc12;
         else if (String(o.id) === '11') modelProb = probs.dcX2;
         const conf = o.probability ? parseFloat(o.probability) : Math.max(modelProb, (1 / odds) * 0.945);
-        if (conf >= 0.75) {
-          eventOptions.push({
+        if (conf >= 0.78) {
+          const item: SportyMatchOutcome = {
             eventId: ev.eventId,
             homeTeam: homeName,
             awayTeam: awayName,
@@ -1131,10 +1168,16 @@ export class SportyBetCatalog {
             outcomeId: String(o.id),
             outcomeDesc: o.desc || (o.id === '9' ? 'Home or Draw' : o.id === '10' ? 'Home or Away' : 'Draw or Away'),
             odds,
-            confidence: Math.min(0.96, Math.max(0.75, conf)),
+            confidence: Math.min(0.96, Math.max(0.78, conf)),
             estimateStartTime: ev.estimateStartTime
-          });
+          };
+          if (!bestDc || item.confidence > bestDc.confidence) {
+            bestDc = item;
+          }
         }
+      }
+      if (bestDc) {
+        eventOptions.push(bestDc);
       }
 
       // 2. Over 1.5 Goals (Market 18, specifier total=1.5) - Strictly >= 75% confidence, odds >= 1.15
@@ -1373,49 +1416,71 @@ export class SportyBetCatalog {
       marketCategory = `${resolvedAdapter.name} Signature Advantage Markets`;
     }
 
-    // Group candidates by eventId so we never duplicate a match
-    const byEvent = new Map<string, SportyMatchOutcome[]>();
+    // Helper to normalize and uniquely identify a match regardless of provider eventId
+    const getMatchKey = (home: string, away: string) => {
+      const clean = (s: string) => (s || '').toLowerCase()
+        .replace(/\b(fc|cf|sc|afc|club|united|city|town)\b/gi, '')
+        .replace(/[^a-z0-9]/g, '');
+      return `${clean(home)}_vs_${clean(away)}`;
+    };
+
+    // Helper to categorize market for diversity enforcement
+    const getMarketCategory = (marketId: string, desc: string, outcomeDesc: string): string => {
+      const text = `${desc} ${outcomeDesc}`.toLowerCase();
+      if (marketId === '10' || text.includes('double chance') || text.includes('home or away') || text.includes('1x') || text.includes('x2') || text.includes('12')) return 'DOUBLE_CHANCE';
+      if (marketId === '18' || text.includes('over') || text.includes('under') || text.includes('goals')) return 'OVER_UNDER';
+      if (marketId === '1' || text.includes('1x2') || outcomeDesc.toLowerCase() === 'home' || outcomeDesc.toLowerCase() === 'away') return '1X2';
+      if (marketId === '14' || text.includes('handicap')) return 'HANDICAP';
+      if (marketId === '29' || text.includes('btts') || text.includes('both teams')) return 'BTTS';
+      if (text.includes('first half') || text.includes('1st half')) return 'FIRST_HALF';
+      if (text.includes('team total') || text.includes('to score')) return 'TEAM_TOTAL';
+      if (text.includes('draw no bet') || text.includes('dnb')) return 'DNB';
+      return 'OTHER';
+    };
+
+    // Group candidates by unique match key (never duplicate a game on the same ticket)
+    const byMatch = new Map<string, SportyMatchOutcome[]>();
     for (const c of candidates) {
-      if (!byEvent.has(c.eventId)) byEvent.set(c.eventId, []);
-      byEvent.get(c.eventId)!.push(c);
+      const key = getMatchKey(c.homeTeam, c.awayTeam);
+      if (!byMatch.has(key)) byMatch.set(key, []);
+      byMatch.get(key)!.push(c);
     }
 
-    // Sort options within each event strictly by highest confidence first, then by safer conservative odds
-    for (const [_, list] of byEvent) {
+    // Sort options within each match strictly by highest confidence first, then by safer odds
+    for (const [_, list] of byMatch) {
       list.sort((a, b) => b.confidence - a.confidence || a.odds - b.odds);
     }
 
-    // Partition events into Confidence Tiers to guarantee picking 90%–95%+ games first down to the 75% floor
-    // Tier 1 (Elite Win Rate): >= 88% win probability (90% - 95%+)
-    // Tier 2 (High Win Rate): 82% - 87% win probability
-    // Tier 3 (Solid Value): 75% - 81% win probability
-    const tier1Events: string[] = [];
-    const tier2Events: string[] = [];
-    const tier3Events: string[] = [];
+    // Partition matches into Confidence Tiers (Elite: >=88%, High: 82%-87%, Solid: >=78%)
+    const tier1Matches: string[] = [];
+    const tier2Matches: string[] = [];
+    const tier3Matches: string[] = [];
 
-    for (const [eventId, list] of byEvent) {
+    for (const [mKey, list] of byMatch) {
       const best = list[0];
-      if (!best || best.confidence < 0.75 || best.odds < 1.12) continue;
+      if (!best || best.confidence < 0.78 || best.odds < 1.12) continue;
       if (best.confidence >= 0.88) {
-        tier1Events.push(eventId);
+        tier1Matches.push(mKey);
       } else if (best.confidence >= 0.82) {
-        tier2Events.push(eventId);
+        tier2Matches.push(mKey);
       } else {
-        tier3Events.push(eventId);
+        tier3Matches.push(mKey);
       }
     }
 
-    // Sort events within each tier by highest confidence descending
-    const sortByConfidence = (aId: string, bId: string) => {
-      const aConf = byEvent.get(aId)?.[0]?.confidence || 0;
-      const bConf = byEvent.get(bId)?.[0]?.confidence || 0;
+    // Sort matches within each tier by highest confidence descending
+    const sortByConfidence = (aKey: string, bKey: string) => {
+      const aConf = byMatch.get(aKey)?.[0]?.confidence || 0;
+      const bConf = byMatch.get(bKey)?.[0]?.confidence || 0;
       return bConf - aConf;
     };
-    tier1Events.sort(sortByConfidence);
-    tier2Events.sort(sortByConfidence);
-    tier3Events.sort(sortByConfidence);
+    tier1Matches.sort(sortByConfidence);
+    tier2Matches.sort(sortByConfidence);
+    tier3Matches.sort(sortByConfidence);
 
-    // Seed per bookmaker so SportyBet, Football.com, BetKing, MSport, Bet9ja get completely DIFFERENT games
+    // Dynamic rotation offset advance: ensures consecutive requests for the same odds produce fresh slips
+    this.rotationOffset = (this.rotationOffset + Math.floor(Math.random() * 5) + 3) % 97;
+
     const bookmakerSeed = Math.abs(
       preferredBookmaker.split('').reduce((acc, c, i) => acc + c.charCodeAt(0) * (i + 37), 0)
     ) * 17;
@@ -1426,42 +1491,73 @@ export class SportyBetCatalog {
       return [...arr.slice(shift), ...arr.slice(0, shift)];
     };
 
-    // Prioritized selection list: Always pull Tier 1 (90%+) first, then Tier 2, then Tier 3!
-    let prioritizedEvents = [
-      ...rotateList(tier1Events, bookmakerSeed),
-      ...rotateList(tier2Events, bookmakerSeed + 13),
-      ...rotateList(tier3Events, bookmakerSeed + 29)
+    // Prioritized match selection list: Tier 1 (90%+) first, then Tier 2, then Tier 3
+    let prioritizedMatches = [
+      ...rotateList(tier1Matches, bookmakerSeed),
+      ...rotateList(tier2Matches, bookmakerSeed + 13),
+      ...rotateList(tier3Matches, bookmakerSeed + 29)
     ];
 
     const isSporty = preferredBookmaker.toLowerCase().includes('sporty');
     if (isSporty) {
-      // Prioritize sr:match: fixtures so SportyBet /orders/share succeeds with a 100% authentic code!
-      prioritizedEvents.sort((a, b) => {
-        const aIsSr = a.startsWith('sr:match:');
-        const bIsSr = b.startsWith('sr:match:');
-        if (aIsSr && !bIsSr) return -1;
-        if (!aIsSr && bIsSr) return 1;
-        return 0;
+      // Rotate within the sr:match pool so consecutive SportyBet calls rotate smoothly!
+      const srKeys = prioritizedMatches.filter(mKey => {
+        const first = byMatch.get(mKey)?.[0];
+        return first?.eventId?.startsWith('sr:match:');
       });
+      const nonSrKeys = prioritizedMatches.filter(mKey => {
+        const first = byMatch.get(mKey)?.[0];
+        return !first?.eventId?.startsWith('sr:match:');
+      });
+
+      const shift = (bookmakerSeed + this.rotationOffset) % (srKeys.length || 1);
+      const srRotated = [...srKeys.slice(shift), ...srKeys.slice(0, shift)];
+      prioritizedMatches = [...srRotated, ...nonSrKeys];
     }
 
     const selected: SportyMatchOutcome[] = [];
+    const seenMatchKeys = new Set<string>();
+    const categoryCounts: Record<string, number> = {};
     let currentOdds = 1.0;
 
-    for (const eventId of prioritizedEvents) {
-      const options = byEvent.get(eventId) || [];
+    // 30% Diversity Quota: No single market style may exceed 30% of total slip legs
+    const estimatedLegs = Math.max(3, Math.round(Math.log(Math.max(1.5, targetOdds)) / Math.log(1.30)));
+    const maxPerCategory = Math.max(1, Math.ceil(estimatedLegs * 0.30));
+
+    for (const mKey of prioritizedMatches) {
+      if (seenMatchKeys.has(mKey)) continue;
+
+      const options = byMatch.get(mKey) || [];
       if (options.length === 0) continue;
 
-      // Pick the best option; if multiple elite options exist (confidence >= 80%), rotate to ensure market diversity across legs
-      let chosen = options[0];
-      if (options.length > 1) {
-        const topOptions = options.filter(o => o.confidence >= 0.80);
-        if (topOptions.length > 1) {
-          const optIdx = (this.rotationOffset + selected.length) % topOptions.length;
-          chosen = topOptions[optIdx];
+      // Filter to only high-probability winners (strictly >= 0.78 confidence)
+      const viableOptions = options.filter(o => o.confidence >= 0.78 && o.odds >= 1.12);
+      if (viableOptions.length === 0) continue;
+
+      // Select option that respects the 30% market diversity quota
+      let chosen: SportyMatchOutcome | null = null;
+      for (const opt of viableOptions) {
+        const cat = getMarketCategory(opt.marketId, opt.marketDesc, opt.outcomeDesc);
+        if ((categoryCounts[cat] || 0) < maxPerCategory) {
+          chosen = opt;
+          break;
         }
       }
-      if (!chosen || chosen.confidence < 0.75 || chosen.odds < 1.12) continue;
+
+      // If all options for this match would exceed their quota, skip this match to preserve diversity!
+      if (!chosen) {
+        if (selected.length < 2) {
+          chosen = viableOptions[0];
+        } else {
+          continue;
+        }
+      }
+
+      if (!chosen) continue;
+
+      const chosenCat = getMarketCategory(chosen.marketId, chosen.marketDesc, chosen.outcomeDesc);
+      categoryCounts[chosenCat] = (categoryCounts[chosenCat] || 0) + 1;
+      seenMatchKeys.add(mKey);
 
       selected.push(chosen);
       currentOdds *= chosen.odds;
@@ -1470,6 +1566,7 @@ export class SportyBetCatalog {
         break;
       }
     }
+
 
     // Sort the final selected picks so the highest win rate games are displayed at the very top of the ticket!
     selected.sort((a, b) => b.confidence - a.confidence || a.odds - b.odds);
