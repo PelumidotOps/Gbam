@@ -1,4 +1,6 @@
-import { Bot, Context, InlineKeyboard } from 'grammy';
+import fs from 'fs';
+import path from 'path';
+import { Bot, Context, InlineKeyboard, InputFile } from 'grammy';
 import { BookmakerRegistry } from '../bookmakers/registry.js';
 import { TicketSplitter } from '../engine/splitter.js';
 import { TicketTrimmer } from '../engine/trimmer.js';
@@ -68,8 +70,35 @@ export function createBot(token: string) {
     console.error('Could not set Telegram commands:', err.message);
   });
 
+  function formatOutcomeCompact(marketDesc: string, outcomeDesc: string): string {
+    const m = (marketDesc || '').toLowerCase();
+    const o = (outcomeDesc || '').toLowerCase();
+    if (m.includes('double chance') || o.includes('away') || o.includes('draw')) {
+      if (o.includes('1x') || o.includes('home or draw') || o.includes('home/draw')) return '1X (Home/Draw)';
+      if (o.includes('x2') || o.includes('draw or away') || o.includes('draw/away')) return 'X2 (Draw/Away)';
+      if (o.includes('12') || o.includes('home or away') || o.includes('home/away')) return 'Home or Away (12)';
+      return outcomeDesc;
+    }
+    if (m.includes('over') || m.includes('under') || m.includes('goals')) {
+      return outcomeDesc.toLowerCase().includes('goals') ? outcomeDesc : `${outcomeDesc} Goals`;
+    }
+    if (m.includes('1x2') || m.includes('match result')) {
+      if (o === 'home' || o === '1') return 'Home Win';
+      if (o === 'away' || o === '2') return 'Away Win';
+      if (o === 'draw' || o === 'x') return 'Draw';
+      return outcomeDesc;
+    }
+    if (m.includes('btts') || m.includes('both teams')) {
+      return o.includes('yes') ? 'Both Teams To Score (GG)' : 'BTTS No (NG)';
+    }
+    if (m.includes('handicap')) {
+      return `Handicap: ${outcomeDesc}`;
+    }
+    return `${outcomeDesc}`;
+  }
+
   function formatPlatformCodes(codes: Record<string, string>, excludePlatform?: string): string {
-    const platforms = ['SportyBet', 'Football.com', 'BetKing', 'MSport', 'Bet9ja', '1xBet', 'Betano'];
+    const platforms = ['SportyBet', 'Football.com', 'BetKing', 'MSport', 'Bet9ja'];
     const lines: string[] = [];
     for (const p of platforms) {
       if (excludePlatform && p.toLowerCase() === excludePlatform.toLowerCase()) continue;
@@ -78,6 +107,18 @@ export function createBot(token: string) {
       }
     }
     return lines.length > 0 ? lines.join('\n') : '';
+  }
+
+  function formatPlatformCodesCompact(codes: Record<string, string>, excludePlatform?: string): string {
+    const platforms = ['SportyBet', 'Football.com', 'BetKing', 'MSport', 'Bet9ja'];
+    const parts: string[] = [];
+    for (const p of platforms) {
+      if (excludePlatform && p.toLowerCase() === excludePlatform.toLowerCase()) continue;
+      if (codes[p]) {
+        parts.push(`*${p}:* \`${codes[p]}\``);
+      }
+    }
+    return parts.length > 0 ? parts.join(' | ') : '';
   }
 
   function formatKickoff(startTime?: number): string {
@@ -134,13 +175,13 @@ export function createBot(token: string) {
     const header = customHeader || '🔒 *VIP Access Required*';
     const text =
       `${header}\n\n` +
-      `Gbam provides exclusive, high-confidence AI match predictions, multi-platform booking codes (SportyBet, Football.com, BetKing, MSport, Bet9ja), and ticket trimmers.\n\n` +
-      `Choose a membership plan below to unlock instant, unlimited access:\n\n` +
-      `• 🟢 *1 Week Access:* ₦${plans['1_week'].priceNgn.toLocaleString()} (7 Days)\n` +
-      `• 🔥 *1 Month VIP:* ₦${plans['1_month'].priceNgn.toLocaleString()} (30 Days — Most Popular)\n` +
-      `• 👑 *3 Months Pro VIP:* ₦${plans['3_months'].priceNgn.toLocaleString()} (90 Days — Save ₦3,000)\n\n` +
-      `💳 *Instant Activation:* Pay with Bank Transfer, Debit Card, or USSD via Paystack. Your access unlocks automatically upon payment.\n\n` +
-      `_Already have an activation code? Tap the button below or type it directly (e.g. \`VIP-30D-XXXXXX\`)!_`;
+      `Unlock daily high-probability slips (>=78% win rate), multi-platform booking codes, ticket trimmers & AI match analysis.\n\n` +
+      `Choose a plan below to activate instantly:\n` +
+      `• 🟢 *1 Week:* ₦${plans['1_week'].priceNgn.toLocaleString()} (7 Days)\n` +
+      `• 🔥 *1 Month VIP:* ₦${plans['1_month'].priceNgn.toLocaleString()} _(Most Popular)_\n` +
+      `• 👑 *3 Months VIP:* ₦${plans['3_months'].priceNgn.toLocaleString()} _(Save ₦3,000)_\n\n` +
+      `💳 _Instant activation via Paystack (Transfer / Card / USSD)._\n` +
+      `_Already have a code? Tap below or type \`VIP-30D-XXXXXX\`!_`;
 
     await ctx.reply(text, {
       parse_mode: 'Markdown',
@@ -157,42 +198,48 @@ export function createBot(token: string) {
     const userId = ctx.from?.id;
     const status = userId ? subscriptionService.isUserActive(userId) : { active: false };
 
-    let vipBadge = '';
+    let statusLine = '';
     if (userId && subscriptionService.isAdmin(userId)) {
-      vipBadge = `👑 *Membership Status:* *Admin / Lifetime VIP (Owner)*\n`;
+      statusLine = '👑 *Status:* Lifetime VIP (Owner)';
     } else if (status.active) {
-      vipBadge = `👑 *Membership Status:* *Active VIP (${status.daysRemaining} days remaining)*\n`;
+      statusLine = `👑 *Status:* Active VIP (${status.daysRemaining}d left)`;
     } else {
-      vipBadge = `🔒 *Membership Status:* *Not Subscribed (Access Locked)*\n`;
+      statusLine = '🔒 *Status:* VIP Subscription Required';
     }
 
-    const welcome =
-      `🎯 *Welcome to Gbam!*\n\n` +
-      `Your smart betting co-pilot — build safer tickets, convert codes across *7 top Nigerian platforms*, and get high-confidence predictions in seconds.\n\n` +
-      vipBadge + `\n` +
-      `*Supported Bookmakers:*\n` +
-      `🟢 *SportyBet* • 🔴 *Football.com* • 🟡 *BetKing* • 🔵 *MSport* • 🟢 *Bet9ja* • 🟣 *1xBet* • 🟠 *Betano*\n\n` +
-      `*What I can do for you:*\n` +
-      `• 🔥 *Safe Picks*: 3 curated tiers (Safe Double, Daily Acca, Super Slip) with codes ready for SportyBet, Football.com, BetKing, MSport & Bet9ja!\n` +
-      `• 🔄 *Convert*: Move your bet code between any Nigerian bookmaker in 1 second.\n` +
-      `• ✂️ *Smart Trim*: Cut the riskiest games out of your ticket to hit your odds goal with >= 70% confidence.\n` +
-      `• ⚖️ *Split*: Divide a long ticket into smaller balanced slips so 1 loss doesn't ruin everything.\n` +
-      `• 📊 *Match Advice*: Check form and recommended safe bets for any match.\n\n` +
-      `*Quick Menu:*\n` +
-      `• \`/picks\` — Today's tiered safe predictions\n` +
-      `• \`/predict <home> vs <away>\` — Match advice\n` +
-      `• \`/trim <code> <targetOdds>\` — Make your ticket safer\n` +
-      `• \`/convert <from> <to> <code>\` — Switch bookmaker\n` +
-      `• \`/split <code> <count>\` — Split long slips\n` +
-      `• \`/status\` — View your VIP subscription details\n\n` +
-      `💬 _You can also just chat naturally with me anytime! For example: "Give me 10 odds on Football.com" or "Give me 5 odds on MSport"!_`;
+    const caption =
+      `🤖 *Welcome to G-BAM BOT!*\n` +
+      `_Data-Driven Football Insights for Smarter Bets_\n\n` +
+      `${statusLine}\n\n` +
+      `⚡ *Quick Menu:*\n` +
+      `• \`/picks\` — Today's verified high-probability slips\n` +
+      `• \`/predict Arsenal vs Chelsea\` — Form & safe bets\n` +
+      `• \`/trim <code\> <odds\>\` — Cut risky games\n` +
+      `• \`/convert <from\> <to\> <code\>\` — Switch bookmaker\n\n` +
+      `💬 _Or just ask naturally: "Give me 5 odds on SportyBet today"_`;
 
-    if (!status.active && (!userId || !subscriptionService.isAdmin(userId))) {
-      await ctx.reply(welcome, { parse_mode: 'Markdown' });
-      await sendVipLockScreen(ctx);
-    } else {
-      await ctx.reply(welcome, { parse_mode: 'Markdown' });
+    const keyboard = (status.active || (userId && subscriptionService.isAdmin(userId)))
+      ? new InlineKeyboard().text("🔥 View Today's VIP Picks", "trigger_picks")
+      : buildPlanKeyboard();
+
+    const bannerPath = path.resolve('assets/gbam-banner.jpg');
+    if (fs.existsSync(bannerPath)) {
+      try {
+        await ctx.replyWithPhoto(new InputFile(bannerPath), {
+          caption,
+          parse_mode: 'Markdown',
+          reply_markup: keyboard
+        });
+        return;
+      } catch (err: any) {
+        console.error('Photo send error:', err.message);
+      }
     }
+
+    await ctx.reply(caption, {
+      parse_mode: 'Markdown',
+      reply_markup: keyboard
+    });
   });
 
   // /help command
@@ -625,26 +672,36 @@ export function createBot(token: string) {
     await ctx.reply("🔍 Generating today's verified high-probability predictions across Nigerian bookmakers...");
     try {
       const tiered = await SportyBetCatalog.getTieredPicks();
-      const msg =
-        `🔥 *Today's Curated Prediction Tiers*\n` +
-        `_Live scheduled fixtures with high statistical confidence & instant booking codes:_\n\n` +
-        `🟢 *1. Safe Double (~2.0x Odds)*\n` +
-        `• Odds: *${tiered.safe.totalOdds}x* (${tiered.safe.picks.length} games, ${(tiered.safe.averageConfidence * 100).toFixed(0)}% win rate)\n` +
-        tiered.safe.picks.map(p => `  👉 ${p.homeTeam} vs ${p.awayTeam}: *${p.marketDesc} (${p.outcomeDesc})* @ ${p.odds} (${formatKickoff(p.estimateStartTime)})`).join('\n') +
-        `\n🎟️ *Codes:* SportyBet: \`${tiered.safe.codes['SportyBet'] || '-'}\` | Football.com: \`${tiered.safe.codes['Football.com'] || '-'}\` | BetKing: \`${tiered.safe.codes['BetKing'] || '-'}\` | MSport: \`${tiered.safe.codes['MSport'] || '-'}\` | Bet9ja: \`${tiered.safe.codes['Bet9ja'] || '-'}\`\n\n` +
-        `🟡 *2. Daily Acca (~5.0x Odds)*\n` +
-        `• Odds: *${tiered.acca.totalOdds}x* (${tiered.acca.picks.length} games, ${(tiered.acca.averageConfidence * 100).toFixed(0)}% win rate)\n` +
-        tiered.acca.picks.slice(0, 4).map(p => `  👉 ${p.homeTeam} vs ${p.awayTeam}: *${p.marketDesc} (${p.outcomeDesc})* @ ${p.odds} (${formatKickoff(p.estimateStartTime)})`).join('\n') +
-        (tiered.acca.picks.length > 4 ? `\n  _...plus ${tiered.acca.picks.length - 4} more safe games_` : '') +
-        `\n🎟️ *Codes:* SportyBet: \`${tiered.acca.codes['SportyBet'] || '-'}\` | Football.com: \`${tiered.acca.codes['Football.com'] || '-'}\` | BetKing: \`${tiered.acca.codes['BetKing'] || '-'}\` | MSport: \`${tiered.acca.codes['MSport'] || '-'}\` | Bet9ja: \`${tiered.acca.codes['Bet9ja'] || '-'}\`\n\n` +
-        `🔴 *3. Super Slip (~10x+ Odds)*\n` +
-        `• Odds: *${tiered.super.totalOdds}x* (${tiered.super.picks.length} games, ${(tiered.super.averageConfidence * 100).toFixed(0)}% win rate)\n` +
-        tiered.super.picks.slice(0, 4).map(p => `  👉 ${p.homeTeam} vs ${p.awayTeam}: *${p.marketDesc} (${p.outcomeDesc})* @ ${p.odds} (${formatKickoff(p.estimateStartTime)})`).join('\n') +
-        (tiered.super.picks.length > 4 ? `\n  _...plus ${tiered.super.picks.length - 4} more safe games_` : '') +
-        `\n🎟️ *Codes:* SportyBet: \`${tiered.super.codes['SportyBet'] || '-'}\` | Football.com: \`${tiered.super.codes['Football.com'] || '-'}\` | BetKing: \`${tiered.super.codes['BetKing'] || '-'}\` | MSport: \`${tiered.super.codes['MSport'] || '-'}\` | Bet9ja: \`${tiered.super.codes['Bet9ja'] || '-'}\`\n\n` +
-        `💡 _Tap \`/picks\` again for a fresh rotated ticket, or type \`/picks safe\`, \`/picks acca\`, or \`/picks super\` for single-slip view!_`;
+      const buildOverviewMsg = () => {
+        const safeSummary =
+          `🟢 *Safe Double • ${tiered.safe.totalOdds}x* (${tiered.safe.picks.length} games, ${(tiered.safe.averageConfidence * 100).toFixed(0)}% win rate)\n` +
+          `📲 SportyBet: \`${tiered.safe.codes['SportyBet'] || '-'}\` | Football.com: \`${tiered.safe.codes['Football.com'] || '-'}\`\n` +
+          tiered.safe.picks.slice(0, 3).map((p, i) => `  ${i + 1}. *${p.homeTeam} vs ${p.awayTeam}* ➔ ${formatOutcomeCompact(p.marketDesc, p.outcomeDesc)} @ ${p.odds}`).join('\n') +
+          (tiered.safe.picks.length > 3 ? `\n  _...plus ${tiered.safe.picks.length - 3} more games_` : '');
 
-      await ctx.reply(msg, { parse_mode: 'Markdown' });
+        const accaSummary =
+          `🟡 *Daily Acca • ${tiered.acca.totalOdds}x* (${tiered.acca.picks.length} games, ${(tiered.acca.averageConfidence * 100).toFixed(0)}% win rate)\n` +
+          `📲 SportyBet: \`${tiered.acca.codes['SportyBet'] || '-'}\` | Football.com: \`${tiered.acca.codes['Football.com'] || '-'}\`\n` +
+          tiered.acca.picks.slice(0, 3).map((p, i) => `  ${i + 1}. *${p.homeTeam} vs ${p.awayTeam}* ➔ ${formatOutcomeCompact(p.marketDesc, p.outcomeDesc)} @ ${p.odds}`).join('\n') +
+          (tiered.acca.picks.length > 3 ? `\n  _...plus ${tiered.acca.picks.length - 3} more games_` : '');
+
+        const superSummary =
+          `🔴 *Super Slip • ${tiered.super.totalOdds}x* (${tiered.super.picks.length} games, ${(tiered.super.averageConfidence * 100).toFixed(0)}% win rate)\n` +
+          `📲 SportyBet: \`${tiered.super.codes['SportyBet'] || '-'}\` | Football.com: \`${tiered.super.codes['Football.com'] || '-'}\`\n` +
+          tiered.super.picks.slice(0, 3).map((p, i) => `  ${i + 1}. *${p.homeTeam} vs ${p.awayTeam}* ➔ ${formatOutcomeCompact(p.marketDesc, p.outcomeDesc)} @ ${p.odds}`).join('\n') +
+          (tiered.super.picks.length > 3 ? `\n  _...plus ${tiered.super.picks.length - 3} more games_` : '');
+
+        return (
+          `🔥 *TODAY'S G-BAM VIP SLIPS*\n` +
+          `_Data-driven football insights with high confidence & instant booking codes:_\n\n` +
+          `${safeSummary}\n\n` +
+          `${accaSummary}\n\n` +
+          `${superSummary}\n\n` +
+          `💡 _Tap \`/picks safe\`, \`/picks acca\`, or \`/picks super\` for full slip breakdowns!_`
+        );
+      };
+
+      await ctx.reply(buildOverviewMsg(), { parse_mode: 'Markdown' });
     } catch (err: any) {
       await ctx.reply(`❌ Could not generate picks: ${err.message}`);
     }
@@ -662,65 +719,75 @@ export function createBot(token: string) {
       // If user asked for a specific tier
       if (sub === 'safe' || sub === '2' || sub === 'double') {
         const t = tiered.safe;
+        const otherCodes = formatPlatformCodesCompact(t.codes, 'SportyBet');
         const msg =
-          `🟢 *Today's Safe Double (${t.totalOdds}x Odds)*\n\n` +
-          `High-confidence picks with ${(t.averageConfidence * 100).toFixed(0)}% average win rate:\n\n` +
-          t.picks.map(p => `• *${p.homeTeam} vs ${p.awayTeam}* (${p.tournament}) — ${formatKickoff(p.estimateStartTime)}\n  👉 *${p.marketDesc}: ${p.outcomeDesc}* (Odds: *${p.odds}*) — Confidence: *${(p.confidence * 100).toFixed(0)}%*`).join('\n\n') +
-          `\n\n📊 *Combined Odds:* *${t.totalOdds}x*\n` +
-          `🎟️ *Multi-Platform Booking Codes:*\n` +
-          formatPlatformCodes(t.codes) +
-          `\n\n_Copy the code for your betting app directly!_`;
+          `🟢 *G-BAM SAFE DOUBLE • ${t.totalOdds}x ODDS*\n` +
+          `🛡️ Win Rate: *${(t.averageConfidence * 100).toFixed(0)}%* • *${t.picks.length} matches*\n\n` +
+          `📲 *SportyBet:* \`${t.codes['SportyBet'] || '-'}\` *(Tap to copy)*\n` +
+          (otherCodes ? `🔄 ${otherCodes}\n\n` : '\n') +
+          `⚽ *Selections:*\n` +
+          t.picks.map((p, i) => `${i + 1}. *${p.homeTeam} vs ${p.awayTeam}* ➔ ${formatOutcomeCompact(p.marketDesc, p.outcomeDesc)} @ ${p.odds}`).join('\n') +
+          `\n\n⚡ _G-BAM BOT • Smarter Picks, Better Odds_`;
         await ctx.reply(msg, { parse_mode: 'Markdown' });
         return;
       }
 
       if (sub === 'acca' || sub === '5') {
         const t = tiered.acca;
+        const otherCodes = formatPlatformCodesCompact(t.codes, 'SportyBet');
         const msg =
-          `🟡 *Today's Daily Acca (${t.totalOdds}x Odds)*\n\n` +
-          `Balanced value accumulator with ${(t.averageConfidence * 100).toFixed(0)}% average win rate:\n\n` +
-          t.picks.map(p => `• *${p.homeTeam} vs ${p.awayTeam}* (${p.tournament}) — ${formatKickoff(p.estimateStartTime)}\n  👉 *${p.marketDesc}: ${p.outcomeDesc}* (Odds: *${p.odds}*) — Confidence: *${(p.confidence * 100).toFixed(0)}%*`).join('\n\n') +
-          `\n\n📊 *Combined Odds:* *${t.totalOdds}x*\n` +
-          `🎟️ *Multi-Platform Booking Codes:*\n` +
-          formatPlatformCodes(t.codes) +
-          `\n\n_Copy the code for your betting app directly!_`;
+          `🟡 *G-BAM DAILY ACCA • ${t.totalOdds}x ODDS*\n` +
+          `🛡️ Win Rate: *${(t.averageConfidence * 100).toFixed(0)}%* • *${t.picks.length} matches*\n\n` +
+          `📲 *SportyBet:* \`${t.codes['SportyBet'] || '-'}\` *(Tap to copy)*\n` +
+          (otherCodes ? `🔄 ${otherCodes}\n\n` : '\n') +
+          `⚽ *Selections:*\n` +
+          t.picks.map((p, i) => `${i + 1}. *${p.homeTeam} vs ${p.awayTeam}* ➔ ${formatOutcomeCompact(p.marketDesc, p.outcomeDesc)} @ ${p.odds}`).join('\n') +
+          `\n\n⚡ _G-BAM BOT • Smarter Picks, Better Odds_`;
         await ctx.reply(msg, { parse_mode: 'Markdown' });
         return;
       }
 
       if (sub === 'super' || sub === '10' || sub === 'slip') {
         const t = tiered.super;
+        const otherCodes = formatPlatformCodesCompact(t.codes, 'SportyBet');
         const msg =
-          `🔴 *Today's Super Slip (${t.totalOdds}x Odds)*\n\n` +
-          `Extended accumulator with ${(t.averageConfidence * 100).toFixed(0)}% average win rate:\n\n` +
-          t.picks.map(p => `• *${p.homeTeam} vs ${p.awayTeam}* (${p.tournament}) — ${formatKickoff(p.estimateStartTime)}\n  👉 *${p.marketDesc}: ${p.outcomeDesc}* (Odds: *${p.odds}*) — Confidence: *${(p.confidence * 100).toFixed(0)}%*`).join('\n\n') +
-          `\n\n📊 *Combined Odds:* *${t.totalOdds}x*\n` +
-          `🎟️ *Multi-Platform Booking Codes:*\n` +
-          formatPlatformCodes(t.codes) +
-          `\n\n_Copy the code for your betting app directly!_`;
+          `🔴 *G-BAM SUPER SLIP • ${t.totalOdds}x ODDS*\n` +
+          `🛡️ Win Rate: *${(t.averageConfidence * 100).toFixed(0)}%* • *${t.picks.length} matches*\n\n` +
+          `📲 *SportyBet:* \`${t.codes['SportyBet'] || '-'}\` *(Tap to copy)*\n` +
+          (otherCodes ? `🔄 ${otherCodes}\n\n` : '\n') +
+          `⚽ *Selections:*\n` +
+          t.picks.map((p, i) => `${i + 1}. *${p.homeTeam} vs ${p.awayTeam}* ➔ ${formatOutcomeCompact(p.marketDesc, p.outcomeDesc)} @ ${p.odds}`).join('\n') +
+          `\n\n⚡ _G-BAM BOT • Smarter Picks, Better Odds_`;
         await ctx.reply(msg, { parse_mode: 'Markdown' });
         return;
       }
 
       // Default: show all 3 tiers with match highlights & booking codes!
+      const safeSummary =
+        `🟢 *Safe Double • ${tiered.safe.totalOdds}x* (${tiered.safe.picks.length} games, ${(tiered.safe.averageConfidence * 100).toFixed(0)}% win rate)\n` +
+        `📲 SportyBet: \`${tiered.safe.codes['SportyBet'] || '-'}\` | Football.com: \`${tiered.safe.codes['Football.com'] || '-'}\`\n` +
+        tiered.safe.picks.slice(0, 3).map((p, i) => `  ${i + 1}. *${p.homeTeam} vs ${p.awayTeam}* ➔ ${formatOutcomeCompact(p.marketDesc, p.outcomeDesc)} @ ${p.odds}`).join('\n') +
+        (tiered.safe.picks.length > 3 ? `\n  _...plus ${tiered.safe.picks.length - 3} more games_` : '');
+
+      const accaSummary =
+        `🟡 *Daily Acca • ${tiered.acca.totalOdds}x* (${tiered.acca.picks.length} games, ${(tiered.acca.averageConfidence * 100).toFixed(0)}% win rate)\n` +
+        `📲 SportyBet: \`${tiered.acca.codes['SportyBet'] || '-'}\` | Football.com: \`${tiered.acca.codes['Football.com'] || '-'}\`\n` +
+        tiered.acca.picks.slice(0, 3).map((p, i) => `  ${i + 1}. *${p.homeTeam} vs ${p.awayTeam}* ➔ ${formatOutcomeCompact(p.marketDesc, p.outcomeDesc)} @ ${p.odds}`).join('\n') +
+        (tiered.acca.picks.length > 3 ? `\n  _...plus ${tiered.acca.picks.length - 3} more games_` : '');
+
+      const superSummary =
+        `🔴 *Super Slip • ${tiered.super.totalOdds}x* (${tiered.super.picks.length} games, ${(tiered.super.averageConfidence * 100).toFixed(0)}% win rate)\n` +
+        `📲 SportyBet: \`${tiered.super.codes['SportyBet'] || '-'}\` | Football.com: \`${tiered.super.codes['Football.com'] || '-'}\`\n` +
+        tiered.super.picks.slice(0, 3).map((p, i) => `  ${i + 1}. *${p.homeTeam} vs ${p.awayTeam}* ➔ ${formatOutcomeCompact(p.marketDesc, p.outcomeDesc)} @ ${p.odds}`).join('\n') +
+        (tiered.super.picks.length > 3 ? `\n  _...plus ${tiered.super.picks.length - 3} more games_` : '');
+
       const msg =
-        `🔥 *Today's Curated Prediction Tiers*\n` +
-        `_Live scheduled fixtures with high statistical confidence & instant booking codes:_\n\n` +
-        `🟢 *1. Safe Double (~2.0x Odds)*\n` +
-        `• Odds: *${tiered.safe.totalOdds}x* (${tiered.safe.picks.length} games, ${(tiered.safe.averageConfidence * 100).toFixed(0)}% win rate)\n` +
-        tiered.safe.picks.map(p => `  👉 ${p.homeTeam} vs ${p.awayTeam}: *${p.marketDesc} (${p.outcomeDesc})* @ ${p.odds} (${formatKickoff(p.estimateStartTime)})`).join('\n') +
-        `\n🎟️ *Codes:* SportyBet: \`${tiered.safe.codes['SportyBet'] || '-'}\` | Football.com: \`${tiered.safe.codes['Football.com'] || '-'}\` | BetKing: \`${tiered.safe.codes['BetKing'] || '-'}\` | MSport: \`${tiered.safe.codes['MSport'] || '-'}\` | Bet9ja: \`${tiered.safe.codes['Bet9ja'] || '-'}\`\n\n` +
-        `🟡 *2. Daily Acca (~5.0x Odds)*\n` +
-        `• Odds: *${tiered.acca.totalOdds}x* (${tiered.acca.picks.length} games, ${(tiered.acca.averageConfidence * 100).toFixed(0)}% win rate)\n` +
-        tiered.acca.picks.slice(0, 4).map(p => `  👉 ${p.homeTeam} vs ${p.awayTeam}: *${p.marketDesc} (${p.outcomeDesc})* @ ${p.odds} (${formatKickoff(p.estimateStartTime)})`).join('\n') +
-        (tiered.acca.picks.length > 4 ? `\n  _...plus ${tiered.acca.picks.length - 4} more safe games_` : '') +
-        `\n🎟️ *Codes:* SportyBet: \`${tiered.acca.codes['SportyBet'] || '-'}\` | Football.com: \`${tiered.acca.codes['Football.com'] || '-'}\` | BetKing: \`${tiered.acca.codes['BetKing'] || '-'}\` | MSport: \`${tiered.acca.codes['MSport'] || '-'}\` | Bet9ja: \`${tiered.acca.codes['Bet9ja'] || '-'}\`\n\n` +
-        `🔴 *3. Super Slip (~10x+ Odds)*\n` +
-        `• Odds: *${tiered.super.totalOdds}x* (${tiered.super.picks.length} games, ${(tiered.super.averageConfidence * 100).toFixed(0)}% win rate)\n` +
-        tiered.super.picks.slice(0, 4).map(p => `  👉 ${p.homeTeam} vs ${p.awayTeam}: *${p.marketDesc} (${p.outcomeDesc})* @ ${p.odds} (${formatKickoff(p.estimateStartTime)})`).join('\n') +
-        (tiered.super.picks.length > 4 ? `\n  _...plus ${tiered.super.picks.length - 4} more safe games_` : '') +
-        `\n🎟️ *Codes:* SportyBet: \`${tiered.super.codes['SportyBet'] || '-'}\` | Football.com: \`${tiered.super.codes['Football.com'] || '-'}\` | BetKing: \`${tiered.super.codes['BetKing'] || '-'}\` | MSport: \`${tiered.super.codes['MSport'] || '-'}\` | Bet9ja: \`${tiered.super.codes['Bet9ja'] || '-'}\`\n\n` +
-        `💡 _Tap \`/picks\` again for a fresh rotated ticket, or type \`/picks safe\`, \`/picks acca\`, or \`/picks super\` for single-slip view!_`;
+        `🔥 *TODAY'S G-BAM VIP SLIPS*\n` +
+        `_Data-driven football insights with high confidence & instant booking codes:_\n\n` +
+        `${safeSummary}\n\n` +
+        `${accaSummary}\n\n` +
+        `${superSummary}\n\n` +
+        `💡 _Tap \`/picks safe\`, \`/picks acca\`, or \`/picks super\` for full slip breakdowns!_`;
 
       await ctx.reply(msg, { parse_mode: 'Markdown' });
     } catch (err: any) {
@@ -751,17 +818,13 @@ export function createBot(token: string) {
       const analysis = await TeamIntelligenceService.analyzeMatch(home, away);
 
       const msg =
-        `📊 *Match Analysis: ${analysis.homeTeam.name} vs ${analysis.awayTeam.name}*\n\n` +
-        `🏆 *Verified Historical Records:*\n` +
-        `• *${analysis.homeTeam.name}:* Form \`${analysis.homeProfile.form}\` | Scores ${analysis.homeProfile.scoredAverage} goals/game | Unbeaten in ${(analysis.homeProfile.unbeatenRate * 100).toFixed(0)}% of games\n` +
-        `• *${analysis.awayTeam.name}:* Form \`${analysis.awayProfile.form}\` | Scores ${analysis.awayProfile.scoredAverage} goals/game | Concedes ${analysis.awayProfile.concededAverage} goals/game\n\n` +
-        `🛡️ *Best Recommended Pick:*\n` +
-        `👉 *${analysis.bestPick.selection}* (*${analysis.bestPick.confidence}% Win Confidence*)\n` +
-        `💡 _${analysis.bestPick.rationale}_\n\n` +
-        `⚽ *Safe Alternatives:*\n` +
-        analysis.alternativePicks.map(a => `• *${a.selection}* (*${a.confidence}%*): ${a.rationale}`).join('\n') +
-        `\n\n📈 *Score Forecast:* *${analysis.scoreForecast}*\n\n` +
-        `_All calculations are derived from verified club match records and statistical distributions._`;
+        `📊 *MATCH ANALYSIS • ${analysis.homeTeam.name} vs ${analysis.awayTeam.name}*\n` +
+        `📈 Form: ${analysis.homeTeam.name} (\`${analysis.homeProfile.form}\`) vs ${analysis.awayTeam.name} (\`${analysis.awayProfile.form}\`)\n\n` +
+        `🎯 *Best Pick:* *${analysis.bestPick.selection}* (${analysis.bestPick.confidence}% Win Rate)\n` +
+        `🔮 *Score Forecast:* *${analysis.scoreForecast}*\n\n` +
+        `💡 *Safe Alternatives:*\n` +
+        analysis.alternativePicks.map(a => `• *${a.selection}* (${a.confidence}% Win Rate)`).join('\n') +
+        `\n\n⚡ _Data-Driven Football Insights • G-BAM BOT_`;
 
       await ctx.reply(msg, { parse_mode: 'Markdown' });
     } catch (err: any) {
@@ -816,7 +879,7 @@ export function createBot(token: string) {
 
       let targetNotice = '';
       if (trimmed.newTotalOdds < targetOdds * 0.85) {
-        targetNotice = `\nℹ️ _Note: We kept all ${trimmed.keptLegs.length} verified safe games (>=70% win rate) from your ticket reaching ${trimmed.newTotalOdds}x odds. The remaining ${droppedCount} matches were removed because their mathematical risk was too high._\n`;
+        targetNotice = `\nℹ️ _Kept ${trimmed.keptLegs.length} verified safe games reaching ${trimmed.newTotalOdds}x. ${droppedCount} high-risk matches dropped._\n`;
       }
 
       const formatSelection = (l: AssessedLeg) => {
@@ -827,20 +890,19 @@ export function createBot(token: string) {
         return sel;
       };
 
+      const otherCodes = formatPlatformCodesCompact(multiCodes, 'SportyBet');
       const msg =
-        `🎯 *Ticket Trimmed & Optimized!*\n\n` +
-        `📉 *Odds Adjusted:* ${slip.totalOdds}x ➔ *${trimmed.newTotalOdds}x* (Target: ${targetOdds}x)\n` +
-        `🔢 *Selections Kept:* *${trimmed.keptLegs.length} of ${slip.legs.length} matches*\n` +
-        `🛡️ *Average Win Confidence:* *${(trimmed.averageLegProbability * 100).toFixed(0)}% per game*\n` +
-        `📊 *Slip Cumulative Probability:* *${(trimmed.cumulativeTrueProbability * 100).toFixed(1)}%*\n\n` +
-        `🎟️ *Booking Codes:*\n` +
-        formatPlatformCodes(multiCodes) +
-        `\n\n*Kept High-Confidence Games:*\n` +
+        `✂️ *TICKET TRIMMED & OPTIMIZED*\n` +
+        `📉 Odds: ${slip.totalOdds}x ➔ *${trimmed.newTotalOdds}x* (Target: ${targetOdds}x)\n` +
+        `🛡️ Kept: *${trimmed.keptLegs.length} of ${slip.legs.length} matches* (Avg Win: *${(trimmed.averageLegProbability * 100).toFixed(0)}%*)\n\n` +
+        `📲 *SportyBet:* \`${multiCodes['SportyBet'] || '-'}\` *(Tap to copy)*\n` +
+        (otherCodes ? `🔄 ${otherCodes}\n\n` : '\n') +
+        `⚽ *Kept High-Confidence Games:*\n` +
         trimmed.keptLegs
-          .map(l => `• ${l.fixture.homeTeam} vs ${l.fixture.awayTeam}:\n  👉 *${formatSelection(l)}* (${l.odds}) — *${(l.assessment.trueProbability * 100).toFixed(0)}% Confidence* ⭐`)
-          .join('\n\n') +
+          .map((l, i) => `${i + 1}. *${l.fixture.homeTeam} vs ${l.fixture.awayTeam}* ➔ *${formatSelection(l)}* @ ${l.odds} (${(l.assessment.trueProbability * 100).toFixed(0)}% Win)`)
+          .join('\n') +
         targetNotice +
-        `\n🛡️ _Copy your preferred code above directly into your betting app!_`;
+        `\n\n⚡ _G-BAM BOT • Smarter Picks, Better Odds_`;
 
       await ctx.reply(msg, { parse_mode: 'Markdown' });
     } catch (err: any) {
@@ -860,7 +922,7 @@ export function createBot(token: string) {
         `• \`/convert SportyBet Football.com SKXLEU\`\n` +
         `• \`/convert BetKing SportyBet 99ZA41\`\n` +
         `• \`/convert Bet9ja MSport ABC123\`\n\n` +
-        `*Supported Platforms:* SportyBet, Football.com, BetKing, MSport, Bet9ja, 1xBet, Betano`,
+        `*Supported Platforms:* SportyBet, Football.com, BetKing, MSport, Bet9ja`,
         { parse_mode: 'Markdown' }
       );
       return;
@@ -880,15 +942,14 @@ export function createBot(token: string) {
       const newCode = await toAdapter.generateBookingCode(slip.legs);
       const multiCodes = await BookmakerRegistry.getMultiBookingCodes(slip.legs);
 
+      const otherCodes = formatPlatformCodesCompact(multiCodes, toPlatform);
       const msg =
-        `✅ *Booking Code Successfully Converted!*\n\n` +
-        `📤 *From:* ${fromPlatform} (\`${code.toUpperCase()}\`)\n` +
-        `📥 *To:* *${toPlatform}* (Code: \`${newCode}\`)\n` +
-        `📊 *Matches:* ${slip.legs.length} games\n` +
-        `💰 *Estimated Odds:* ~${slip.totalOdds}x\n\n` +
-        `🎟️ *Also Available On Other Platforms:*\n` +
-        formatPlatformCodes(multiCodes, toPlatform) +
-        `\n\n_Copy and paste directly into ${toPlatform}!_`;
+        `✅ *BOOKING CODE CONVERTED*\n\n` +
+        `📤 From: *${fromPlatform}* (\`${code.toUpperCase()}\`)\n` +
+        `📥 To: *${toPlatform}* ➔ \`${newCode}\` *(Tap to copy)*\n` +
+        `📊 *${slip.legs.length} games* • *~${slip.totalOdds}x odds*\n\n` +
+        (otherCodes ? `🔄 *Also on:* ${otherCodes}\n\n` : '') +
+        `_Copy and paste directly into ${toPlatform}!_`;
 
       await ctx.reply(msg, { parse_mode: 'Markdown' });
     } catch (err: any) {
@@ -1067,32 +1128,22 @@ export function createBot(token: string) {
       try {
         const result = await SportyBetCatalog.buildSlipForTargetOdds(requestedOdds, targetPlatform, marketFilter, timeframe);
 
-        const minPickConfidence = Math.min(...result.picks.map(p => p.confidence));
-        const minConfPct = Math.round(minPickConfidence * 100);
         const avgConfPct = Math.round(result.averageConfidence * 100);
-
-        const otherCodes = formatPlatformCodes(result.multiCodes, result.targetBookmaker);
-        const otherCodesBlock = otherCodes
-          ? `\n\n📱 *Also available on other platforms:*\n${otherCodes}`
-          : '';
+        const otherCodes = formatPlatformCodesCompact(result.multiCodes, result.targetBookmaker);
 
         const msg =
-          `🎟️ *Here is your ${result.totalOdds}x High-Probability Slip!*\n` +
-          `📌 *Focus:* _${result.marketCategory}_\n` +
-          `📅 *Schedule:* *${result.scheduleLabel}*\n\n` +
-          `Built using verified scheduled matches — every selection strictly vetted at >=${minConfPct}% win probability (Average: ${avgConfPct}%):\n\n` +
+          `🎯 *G-BAM VIP SLIP • ${result.totalOdds}x ODDS*\n` +
+          `📅 *${result.scheduleLabel}* • 🛡️ Avg Win: *${avgConfPct}%*\n\n` +
+          `📲 *${result.targetBookmaker}:* \`${result.bookingCode}\` *(Tap to copy)*\n` +
+          (otherCodes ? `🔄 ${otherCodes}\n\n` : '\n') +
+          `⚽ *Selections (${result.picks.length} matches):*\n` +
           result.picks
             .map(
-              p =>
-                `• *${p.homeTeam} vs ${p.awayTeam}* (${p.tournament}) — ${formatKickoff(p.estimateStartTime)}\n` +
-                `  👉 *${p.marketDesc}: ${p.outcomeDesc}* (Odds: *${p.odds}*) — Confidence: *${(p.confidence * 100).toFixed(0)}%*`
+              (p, i) =>
+                `${i + 1}. *${p.homeTeam} vs ${p.awayTeam}* ➔ ${formatOutcomeCompact(p.marketDesc, p.outcomeDesc)} @ ${p.odds}`
             )
-            .join('\n\n') +
-          `\n\n📊 *Total Odds:* *${result.totalOdds}x*\n` +
-          `🛡️ *Average Win Confidence:* *${avgConfPct}% per match*\n\n` +
-          `🎯 *${result.targetBookmaker} Booking Code:* \`${result.bookingCode}\`` +
-          otherCodesBlock +
-          `\n\n_Copy your code directly into the app!_`;
+            .join('\n') +
+          `\n\n⚡ _Data-Driven Football Insights • G-BAM BOT_`;
 
         await ctx.reply(msg, { parse_mode: 'Markdown' });
         return;
