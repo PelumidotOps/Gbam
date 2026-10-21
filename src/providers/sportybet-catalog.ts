@@ -1088,7 +1088,7 @@ export class SportyBetCatalog {
   public static async getDiverseMarketCandidates(
     maxTimestamp: number,
     targetOdds: number,
-    maxEvents: number = 60,
+    maxEvents: number = 80,
     preferredBookmaker?: string
   ): Promise<SportyMatchOutcome[]> {
     await this.refreshCatalog();
@@ -1121,7 +1121,8 @@ export class SportyBetCatalog {
       });
     }
 
-    const targetEvents = events.slice(0, maxEvents);
+    const eventLimit = Math.max(maxEvents, targetOdds >= 8.0 ? 120 : 60);
+    const targetEvents = events.slice(0, eventLimit);
     const fetchedEvents = await Promise.all(
       targetEvents.map(async ev => {
         if (ev.markets && Array.isArray(ev.markets) && ev.markets.length > 0) {
@@ -1362,8 +1363,8 @@ export class SportyBetCatalog {
         e => e.estimateStartTime && e.estimateStartTime > minKickoff && e.estimateStartTime <= todayCutoff
       ).length;
 
-      // If it is late evening and today has fewer than 15 remaining matches, or if targetOdds is high (e.g. >= 10x requiring 15+ legs), automatically span to the next 24-36h (Today & Tomorrow) so tickets have maximum open-market diversity and zero platform overlap!
-      if (availableToday < 15 || targetOdds >= 10.0) {
+      // If it is late evening and today has fewer than 20 remaining matches, or if targetOdds is >= 4.5, automatically span to the next 24-36h (Today & Tomorrow) so tickets have ample high-probability matches to reach the target odds!
+      if (availableToday < 20 || targetOdds >= 4.5) {
         maxTimestamp = now + 36 * 60 * 60 * 1000;
         scheduleLabel = availableToday < 6 ? 'Next 24 Hours (Today & Tomorrow)' : 'Today & Tomorrow';
       } else {
@@ -1451,20 +1452,23 @@ export class SportyBetCatalog {
       list.sort((a, b) => b.confidence - a.confidence || a.odds - b.odds);
     }
 
-    // Partition matches into Confidence Tiers (Elite: >=88%, High: 82%-87%, Solid: >=78%)
+    // Partition matches into Confidence Tiers (Elite: >=88%, High: 82%-87%, Solid: 78%-81%, Good: >=74%)
     const tier1Matches: string[] = [];
     const tier2Matches: string[] = [];
     const tier3Matches: string[] = [];
+    const tier4Matches: string[] = [];
 
     for (const [mKey, list] of byMatch) {
       const best = list[0];
-      if (!best || best.confidence < 0.78 || best.odds < 1.12) continue;
+      if (!best || best.confidence < 0.74 || best.odds < 1.12) continue;
       if (best.confidence >= 0.88) {
         tier1Matches.push(mKey);
       } else if (best.confidence >= 0.82) {
         tier2Matches.push(mKey);
-      } else {
+      } else if (best.confidence >= 0.78) {
         tier3Matches.push(mKey);
+      } else {
+        tier4Matches.push(mKey);
       }
     }
 
@@ -1477,6 +1481,7 @@ export class SportyBetCatalog {
     tier1Matches.sort(sortByConfidence);
     tier2Matches.sort(sortByConfidence);
     tier3Matches.sort(sortByConfidence);
+    tier4Matches.sort(sortByConfidence);
 
     // Dynamic rotation offset advance: ensures consecutive requests for the same odds produce fresh slips
     this.rotationOffset = (this.rotationOffset + Math.floor(Math.random() * 5) + 3) % 97;
@@ -1491,16 +1496,17 @@ export class SportyBetCatalog {
       return [...arr.slice(shift), ...arr.slice(0, shift)];
     };
 
-    // Prioritized match selection list: Tier 1 (90%+) first, then Tier 2, then Tier 3
+    // Prioritized match selection list: Tier 1 (88%+) first, then Tier 2 (82%+), Tier 3 (78%+), Tier 4 (74%+)
     let prioritizedMatches = [
       ...rotateList(tier1Matches, bookmakerSeed),
       ...rotateList(tier2Matches, bookmakerSeed + 13),
-      ...rotateList(tier3Matches, bookmakerSeed + 29)
+      ...rotateList(tier3Matches, bookmakerSeed + 29),
+      ...rotateList(tier4Matches, bookmakerSeed + 43)
     ];
 
     const isSporty = preferredBookmaker.toLowerCase().includes('sporty');
     if (isSporty) {
-      // Rotate within the sr:match pool so consecutive SportyBet calls rotate smoothly!
+      // Prioritize sr:match IDs for SportyBet while maintaining smooth rotation
       const srKeys = prioritizedMatches.filter(mKey => {
         const first = byMatch.get(mKey)?.[0];
         return first?.eventId?.startsWith('sr:match:');
@@ -1510,19 +1516,14 @@ export class SportyBetCatalog {
         return !first?.eventId?.startsWith('sr:match:');
       });
 
-      const shift = (bookmakerSeed + this.rotationOffset) % (srKeys.length || 1);
+      const shift = (bookmakerSeed + this.rotationOffset) % Math.max(1, srKeys.length);
       const srRotated = [...srKeys.slice(shift), ...srKeys.slice(0, shift)];
       prioritizedMatches = [...srRotated, ...nonSrKeys];
     }
 
     const selected: SportyMatchOutcome[] = [];
     const seenMatchKeys = new Set<string>();
-    const categoryCounts: Record<string, number> = {};
     let currentOdds = 1.0;
-
-    // 30% Diversity Quota: No single market style may exceed 30% of total slip legs
-    const estimatedLegs = Math.max(3, Math.round(Math.log(Math.max(1.5, targetOdds)) / Math.log(1.30)));
-    const maxPerCategory = Math.max(1, Math.ceil(estimatedLegs * 0.30));
 
     for (const mKey of prioritizedMatches) {
       if (seenMatchKeys.has(mKey)) continue;
@@ -1530,39 +1531,20 @@ export class SportyBetCatalog {
       const options = byMatch.get(mKey) || [];
       if (options.length === 0) continue;
 
-      // Filter to only high-probability winners (strictly >= 0.78 confidence)
-      const viableOptions = options.filter(o => o.confidence >= 0.78 && o.odds >= 1.12);
+      // Filter to only verified high-probability winners (strictly >= 0.74 confidence, safe odds >= 1.12)
+      const viableOptions = options.filter(o => o.confidence >= 0.74 && o.odds >= 1.12);
       if (viableOptions.length === 0) continue;
 
-      // Select option that respects the 30% market diversity quota
-      let chosen: SportyMatchOutcome | null = null;
-      for (const opt of viableOptions) {
-        const cat = getMarketCategory(opt.marketId, opt.marketDesc, opt.outcomeDesc);
-        if ((categoryCounts[cat] || 0) < maxPerCategory) {
-          chosen = opt;
-          break;
-        }
-      }
+      // Select the single highest win-rate outcome for this match (no duplicate matches per ticket)
+      viableOptions.sort((a, b) => b.confidence - a.confidence || a.odds - b.odds);
+      const chosen = viableOptions[0];
 
-      // If all options for this match would exceed their quota, skip this match to preserve diversity!
-      if (!chosen) {
-        if (selected.length < 2) {
-          chosen = viableOptions[0];
-        } else {
-          continue;
-        }
-      }
-
-      if (!chosen) continue;
-
-      const chosenCat = getMarketCategory(chosen.marketId, chosen.marketDesc, chosen.outcomeDesc);
-      categoryCounts[chosenCat] = (categoryCounts[chosenCat] || 0) + 1;
       seenMatchKeys.add(mKey);
-
       selected.push(chosen);
       currentOdds *= chosen.odds;
 
-      if (currentOdds >= targetOdds * 0.95 && selected.length >= 2) {
+      // Stop once we have reached or exceeded target odds (e.g. 92% of targetOdds)
+      if (currentOdds >= targetOdds * 0.92 && selected.length >= 2) {
         break;
       }
     }
