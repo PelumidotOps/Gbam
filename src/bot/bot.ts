@@ -321,7 +321,7 @@ export function createBot(token: string) {
   // PAYSTACK CALLBACK QUERIES (Public)
   // ==========================================
 
-  bot.callbackQuery(/^(plan_1_week|plan_1_month|plan_3_months)$/, async (ctx) => {
+  bot.callbackQuery(/^(?:plan_)?(1_week|1_month|3_months)$/, async (ctx) => {
     await ctx.answerCallbackQuery();
     const planId = ctx.match[1] as '1_week' | '1_month' | '3_months';
     const telegramId = ctx.from.id;

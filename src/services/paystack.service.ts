@@ -67,7 +67,7 @@ export class PaystackService {
   public async initializeTransaction(params: {
     telegramId: number;
     username?: string;
-    planId: '1_week' | '1_month' | '3_months';
+    planId: '1_week' | '1_month' | '3_months' | string;
   }): Promise<{
     success: boolean;
     authorizationUrl?: string;
@@ -76,7 +76,8 @@ export class PaystackService {
     plan?: SubscriptionPlan;
   }> {
     const plans = this.getPlans();
-    const plan = plans[params.planId];
+    const cleanId = (params.planId || '').replace(/^plan_/, '');
+    const plan = plans[cleanId] || plans[params.planId];
     if (!plan) {
       return { success: false, error: 'Invalid plan selected' };
     }
