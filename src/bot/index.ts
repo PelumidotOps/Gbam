@@ -1,4 +1,5 @@
 import 'dotenv/config';
+import http from 'http';
 import { createBot } from './bot.js';
 
 const token = process.env.TELEGRAM_BOT_TOKEN;
@@ -9,6 +10,17 @@ if (!token) {
   console.error('   TELEGRAM_BOT_TOKEN=your_token_here\n');
   process.exit(1);
 }
+
+// Lightweight HTTP server for Render / cloud platform health checks & keep-alive
+const port = process.env.PORT || 3000;
+const server = http.createServer((_req, res) => {
+  res.writeHead(200, { 'Content-Type': 'application/json' });
+  res.end(JSON.stringify({ status: 'ok', service: 'G-BAM BOT', timestamp: new Date().toISOString() }));
+});
+
+server.listen(port, () => {
+  console.log(`🌐 Health check server listening on port ${port}`);
+});
 
 const bot = createBot(token);
 
@@ -29,10 +41,12 @@ bot.start({
 // Handle graceful shutdowns
 process.once('SIGINT', () => {
   console.log('Stopping bot...');
+  server.close();
   bot.stop();
 });
 
 process.once('SIGTERM', () => {
   console.log('Stopping bot...');
+  server.close();
   bot.stop();
 });
