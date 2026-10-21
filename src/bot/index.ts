@@ -12,6 +12,12 @@ if (!token) {
 
 const bot = createBot(token);
 
+// Global Error Handler to prevent process termination
+bot.catch((err) => {
+  const ctx = err.ctx;
+  console.error(`[Gbam Bot Error] Update ${ctx?.update?.update_id}:`, err.error);
+});
+
 console.log('🚀 Gbam Telegram Bot is starting up...');
 
 bot.start({

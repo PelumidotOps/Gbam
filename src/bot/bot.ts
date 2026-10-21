@@ -472,7 +472,7 @@ export function createBot(token: string) {
       (label ? `🏷️ *Label:* ${label}\n` : '') +
       `📅 *Generated:* ${new Date(newCode.createdAt).toLocaleString()}\n\n` +
       `👉 *Instructions for customer:*\n` +
-      `Tell the customer to open @GbamAI_bot and paste this code:\n` +
+      `Tell the customer to open \`@GbamAI_bot\` and paste this code:\n` +
       `\`${newCode.code}\`\n\n` +
       `_The code is single-use and will automatically activate their access._`;
 
@@ -502,7 +502,7 @@ export function createBot(token: string) {
       const expiryStr = s.isLifetime ? 'Lifetime' : new Date(s.expiresAt).toLocaleDateString('en-GB');
       const userTag = s.username ? `@${s.username}` : (s.fullName || 'No Name');
 
-      return `${idx + 1}. *${userTag}* (\`${s.telegramId}\`)\n   ${statusEmoji} | ${s.plan} | Expiry: ${expiryStr}${isOwner ? ' *(Owner)*' : ''}`;
+      return `${idx + 1}. \`${userTag}\` (\`${s.telegramId}\`)\n   ${statusEmoji} | ${s.plan} | Expiry: ${expiryStr}${isOwner ? ' *(Owner)*' : ''}`;
     });
 
     const header = `👥 *VIP Subscribers (${subs.length} total):*\n\n`;
