@@ -1,0 +1,117 @@
+{
+  "subscribers": {
+    "123498765": {
+      "telegramId": 123498765,
+      "username": "qa_tester",
+      "plan": "VIP 30 Days (Gift)",
+      "status": "revoked",
+      "activatedAt": "2026-10-21T13:40:15.385Z",
+      "expiresAt": "2027-01-19T13:40:15.385Z",
+      "isLifetime": false,
+      "redeemedCode": "VIP-30D-12C74E"
+    },
+    "2003833302": {
+      "telegramId": 2003833302,
+      "username": "oxclone",
+      "fullName": "Admin (Gbam Owner)",
+      "plan": "lifetime",
+      "status": "active",
+      "activatedAt": "2026-10-21T12:00:00.000Z",
+      "expiresAt": "2126-10-21T12:00:00.000Z",
+      "isLifetime": true
+    },
+    "6812908167": {
+      "telegramId": 6812908167,
+      "username": "BigOxxy",
+      "fullName": "BigOxxy (Ø,G)",
+      "plan": "VIP (1_week)",
+      "status": "active",
+      "activatedAt": "2026-10-21T13:07:54.018Z",
+      "expiresAt": "2026-10-28T13:07:54.018Z",
+      "isLifetime": false,
+      "paymentReference": "GBAM_1_WEEK_6812908167_1792587958731"
+    },
+    "7073634582": {
+      "telegramId": 7073634582,
+      "username": "D_Cryptobaby",
+      "fullName": "D_Cryptobaby",
+      "plan": "1 Week Access",
+      "status": "active",
+      "activatedAt": "2026-10-21T15:29:46.000Z",
+      "expiresAt": "2026-10-28T15:29:46.000Z",
+      "isLifetime": false,
+      "paymentReference": "GBAM_1_WEEK_7073634582_1792596397382"
+    }
+  },
+  "codes": {
+    "VIP-LIFE-FEBEC1": {
+      "code": "VIP-LIFE-FEBEC1",
+      "days": 36500,
+      "isLifetime": true,
+      "createdBy": 2003833302,
+      "createdAt": "2026-10-21T12:57:39.563Z",
+      "isUsed": false
+    },
+    "VIP-LIFE-29B5F8": {
+      "code": "VIP-LIFE-29B5F8",
+      "days": 36500,
+      "isLifetime": true,
+      "createdBy": 2003833302,
+      "createdAt": "2026-10-21T12:58:59.953Z",
+      "isUsed": false
+    },
+    "VIP-30D-CCBC38": {
+      "code": "VIP-30D-CCBC38",
+      "days": 30,
+      "isLifetime": false,
+      "createdBy": 2003833302,
+      "createdAt": "2026-10-21T12:59:00.228Z",
+      "isUsed": false
+    },
+    "VIP-30D-4E8E2D": {
+      "code": "VIP-30D-4E8E2D",
+      "days": 30,
+      "isLifetime": false,
+      "createdBy": 2003833302,
+      "createdAt": "2026-10-21T13:40:15.383Z",
+      "isUsed": true,
+      "label": "QA Test 30D",
+      "usedBy": 123498765,
+      "usedByUsername": "qa_tester",
+      "usedAt": "2026-10-21T13:40:15.385Z"
+    },
+    "VIP-30D-0AACBA": {
+      "code": "VIP-30D-0AACBA",
+      "days": 30,
+      "isLifetime": false,
+      "createdBy": 2003833302,
+      "createdAt": "2026-10-21T14:06:41.776Z",
+      "isUsed": true,
+      "label": "QA Test 30D",
+      "usedBy": 123498765,
+      "usedByUsername": "qa_tester",
+      "usedAt": "2026-10-21T14:06:41.779Z"
+    },
+    "VIP-30D-12C74E": {
+      "code": "VIP-30D-12C74E",
+      "days": 30,
+      "isLifetime": false,
+      "createdBy": 2003833302,
+      "createdAt": "2026-10-21T14:27:07.672Z",
+      "isUsed": true,
+      "label": "QA Test 30D",
+      "usedBy": 123498765,
+      "usedByUsername": "qa_tester",
+      "usedAt": "2026-10-21T14:27:07.675Z"
+    },
+    "VIP-7D-DC4281": {
+      "code": "VIP-7D-DC4281",
+      "days": 7,
+      "isLifetime": false,
+      "createdBy": 2003833302,
+      "createdAt": "2026-10-21T15:42:30.979Z",
+      "isUsed": false,
+      "label": "Customer D_Cryptobaby"
+    }
+  }
+}

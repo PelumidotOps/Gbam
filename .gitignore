@@ -33,3 +33,4 @@ coverage/
 # Runtime data & scratch
 scratch/
 data/*.json
+!data/subscriptions.json
