@@ -20,6 +20,17 @@ import { PaystackService } from '../services/paystack.service.js';
 export function createBot(token: string) {
   const bot = new Bot(token);
 
+  // Auto-recover from any Markdown entity parsing errors across all messages
+  bot.api.config.use(async (prev, method, payload, signal) => {
+    const res = await prev(method, payload, signal);
+    if (!res.ok && (method === 'sendMessage' || method === 'editMessageText') && res.description?.includes('entities')) {
+      const fallback = { ...(payload as any) };
+      delete fallback.parse_mode;
+      return await prev(method, fallback, signal);
+    }
+    return res;
+  });
+
   const subscriptionService = SubscriptionService.getInstance();
   const paystackService = PaystackService.getInstance();
 

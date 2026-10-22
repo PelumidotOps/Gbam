@@ -96,6 +96,15 @@ const server = http.createServer((req, res) => {
 
 server.listen(port, () => {
   console.log(`🌐 Health check & Webhook server listening on port ${port}`);
+
+  // Auto keep-alive ping: Render free tier spins down after 15m of no HTTP traffic.
+  // Pinging every 8 minutes resets Render's inactivity timer to keep the bot online 24/7.
+  const appUrl = process.env.RENDER_EXTERNAL_URL || 'https://gbam.onrender.com';
+  setInterval(() => {
+    fetch(`${appUrl}/`)
+      .then(res => res.json())
+      .catch(err => console.warn('[KeepAlive] Ping warning:', err.message));
+  }, 8 * 60 * 1000);
 });
 
 // Global Error Handler to prevent process termination
