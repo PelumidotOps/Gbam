@@ -124,17 +124,59 @@ export class SportyBetCatalog {
   }
 
   /**
-   * Purges expired or imminent matches (kickoff <= Date.now() + 15m) from pool and rawEvents
+   * Filters out Simulated Reality League (SRL), eSoccer, Cyber, Virtual, and Electronic matches.
+   * Real bettors strictly want authentic, live human football matches.
+   */
+  public static isSimulatedOrVirtualMatch(
+    homeName?: string,
+    awayName?: string,
+    leagueName?: string,
+    categoryName?: string
+  ): boolean {
+    const text = `${homeName || ''} ${awayName || ''} ${leagueName || ''} ${categoryName || ''}`.toLowerCase();
+    
+    return (
+      /\bsrl\b/i.test(text) ||
+      /\(srl\)/i.test(text) ||
+      /simulated/i.test(text) ||
+      /esoccer/i.test(text) ||
+      /e-soccer/i.test(text) ||
+      /esports/i.test(text) ||
+      /e-sports/i.test(text) ||
+      /cyber/i.test(text) ||
+      /gt\s*leagues/i.test(text) ||
+      /\bfifa\b/i.test(text) ||
+      /electronic\s*league/i.test(text) ||
+      /virtual/i.test(text) ||
+      /penalty\s*shootout/i.test(text) ||
+      /\d+\s*mins?\s*play/i.test(text) ||
+      /2x\d+\s*min/i.test(text) ||
+      /gg\s*league/i.test(text) ||
+      /battle\s*-\s*\d+/i.test(text) ||
+      /live\s*arena/i.test(text)
+    );
+  }
+
+  /**
+   * Purges expired, imminent, or simulated matches from pool and rawEvents
    */
   public static cleanExpiredEvents(): void {
     const minKickoff = Date.now() + 15 * 60 * 1000;
     for (const [id, ev] of this.rawEvents.entries()) {
-      if (!ev.estimateStartTime || ev.estimateStartTime <= minKickoff) {
+      if (
+        !ev.estimateStartTime ||
+        ev.estimateStartTime <= minKickoff ||
+        this.isSimulatedOrVirtualMatch(ev.homeTeamName, ev.awayTeamName, ev.sport?.category?.tournament?.name || ev.tournamentName, ev.sport?.category?.name)
+      ) {
         this.rawEvents.delete(id);
       }
     }
     for (const [id, item] of this.pool.entries()) {
-      if (!item.estimateStartTime || item.estimateStartTime <= minKickoff) {
+      if (
+        !item.estimateStartTime ||
+        item.estimateStartTime <= minKickoff ||
+        this.isSimulatedOrVirtualMatch(item.homeTeam, item.awayTeam, item.tournament, item.category)
+      ) {
         this.pool.delete(id);
       }
     }
@@ -177,6 +219,10 @@ export class SportyBetCatalog {
                 const homeName = f.teams.home.name;
                 const awayName = f.teams.away.name;
                 const leagueName = f.league?.name || 'Football';
+                const country = f.league?.country || 'Soccer';
+
+                // Skip any simulated / virtual / esports matches
+                if (this.isSimulatedOrVirtualMatch(homeName, awayName, leagueName, country)) continue;
 
                 // Compute dynamic Poisson goal expectancy lambdas per match
                 const { homeLambda, awayLambda } = this.estimateTeamStrength(homeName, awayName, leagueName);
@@ -410,6 +456,9 @@ export class SportyBetCatalog {
       const leagueName = ev.sport?.category?.tournament?.name || ev.tournamentName || 'Football';
       const categoryName = ev.sport?.category?.name || 'Soccer';
 
+      // Strictly skip any simulated, SRL, eSoccer, virtual, or cyber matches
+      if (this.isSimulatedOrVirtualMatch(homeName, awayName, leagueName, categoryName)) continue;
+
       const { homeLambda, awayLambda } = this.estimateTeamStrength(homeName, awayName, leagueName);
       const probs = PoissonModel.calculateMatchProbabilities({ homeLambda, awayLambda });
 
@@ -637,7 +686,11 @@ export class SportyBetCatalog {
     await this.refreshCatalog();
     this.cleanExpiredEvents();
     const minKickoff = Date.now() + 15 * 60 * 1000;
-    const all = Array.from(this.pool.values()).filter(p => p.estimateStartTime && p.estimateStartTime > minKickoff);
+    const all = Array.from(this.pool.values()).filter(
+      p => p.estimateStartTime &&
+      p.estimateStartTime > minKickoff &&
+      !this.isSimulatedOrVirtualMatch(p.homeTeam, p.awayTeam, p.tournament, p.category)
+    );
 
     // Sort by confidence descending, then by conservative safe odds
     const sorted = all.sort((a, b) => b.confidence - a.confidence || a.odds - b.odds);
@@ -664,7 +717,11 @@ export class SportyBetCatalog {
     await this.refreshCatalog();
     this.cleanExpiredEvents();
     const minKickoff = Date.now() + 15 * 60 * 1000;
-    const all = Array.from(this.pool.values()).filter(p => p.estimateStartTime && p.estimateStartTime > minKickoff);
+    const all = Array.from(this.pool.values()).filter(
+      p => p.estimateStartTime &&
+      p.estimateStartTime > minKickoff &&
+      !this.isSimulatedOrVirtualMatch(p.homeTeam, p.awayTeam, p.tournament, p.category)
+    );
 
     // Sort pool by highest confidence first
     const sorted = all.sort((a, b) => b.confidence - a.confidence || a.odds - b.odds);
@@ -875,11 +932,15 @@ export class SportyBetCatalog {
 
     const now = Date.now();
     const minKickoff = now + 15 * 60 * 1000;
-    // Collect upcoming event IDs strictly in the future (> 15 mins) within timeframe
-    let events = Array.from(this.rawEvents.values()).filter(e => e.estimateStartTime && e.estimateStartTime > minKickoff);
+    // Collect upcoming event IDs strictly in the future (> 15 mins) within timeframe (strictly excluding simulated/SRL matches)
+    let events = Array.from(this.rawEvents.values()).filter(
+      e => e.estimateStartTime &&
+      e.estimateStartTime > minKickoff &&
+      !this.isSimulatedOrVirtualMatch(e.homeTeamName, e.awayTeamName, e.sport?.category?.tournament?.name || e.tournamentName, e.sport?.category?.name)
+    );
     if (events.length === 0) {
       events = Array.from(this.pool.values())
-        .filter(p => p.estimateStartTime && p.estimateStartTime > minKickoff)
+        .filter(p => p.estimateStartTime && p.estimateStartTime > minKickoff && !this.isSimulatedOrVirtualMatch(p.homeTeam, p.awayTeam, p.tournament, p.category))
         .map(p => ({
           eventId: p.eventId,
           homeTeamName: p.homeTeam,
@@ -1096,10 +1157,14 @@ export class SportyBetCatalog {
 
     const now = Date.now();
     const minKickoff = now + 15 * 60 * 1000;
-    let events = Array.from(this.rawEvents.values()).filter(e => e.estimateStartTime && e.estimateStartTime > minKickoff);
+    let events = Array.from(this.rawEvents.values()).filter(
+      e => e.estimateStartTime &&
+      e.estimateStartTime > minKickoff &&
+      !this.isSimulatedOrVirtualMatch(e.homeTeamName, e.awayTeamName, e.sport?.category?.tournament?.name || e.tournamentName, e.sport?.category?.name)
+    );
     if (events.length === 0) {
       events = Array.from(this.pool.values())
-        .filter(p => p.estimateStartTime && p.estimateStartTime > minKickoff)
+        .filter(p => p.estimateStartTime && p.estimateStartTime > minKickoff && !this.isSimulatedOrVirtualMatch(p.homeTeam, p.awayTeam, p.tournament, p.category))
         .map(p => ({
           eventId: p.eventId,
           homeTeamName: p.homeTeam,
