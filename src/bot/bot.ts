@@ -71,6 +71,7 @@ export function createBot(token: string) {
   bot.api.setMyCommands([
     { command: 'start', description: 'Start Gbam and see status' },
     { command: 'picks', description: 'Get today\'s high-probability predictions' },
+    { command: 'srl', description: 'Simulated Reality League (SRL) virtual slips e.g. /srl 5' },
     { command: 'predict', description: 'Analyze a match e.g. /predict Arsenal vs Chelsea' },
     { command: 'trim', description: 'Trim a ticket to safer odds e.g. /trim BC99ZA 10' },
     { command: 'convert', description: 'Convert codes between SportyBet, Bet9ja, etc.' },
@@ -299,7 +300,11 @@ export function createBot(token: string) {
       `*5. Convert Booking Codes Between 7 Platforms*\n` +
       `\`/convert SportyBet Football.com SKXLEU\`\n` +
       `Converts codes between SportyBet, Bet9ja, Football.com, BetKing, MSport, 1xBet, and Betano!\n\n` +
-      `*6. VIP Subscription Status*\n` +
+      `*6. Simulated Reality League (SRL) Virtual Slips*\n` +
+      `Want fast-settling simulated games? Type:\n` +
+      `• \`/srl\` or \`/srl 5\` — 5 odds composed strictly of live SRL matches\n` +
+      `• _Or ask: "Give me 10 odds on SRL"_\n\n` +
+      `*7. VIP Subscription Status*\n` +
       `Type \`/status\` anytime to check your remaining subscription time.`;
 
     await ctx.reply(help, { parse_mode: 'Markdown' });
@@ -865,6 +870,34 @@ export function createBot(token: string) {
     }
   });
 
+  // /srl [odds] - Dedicated Simulated Reality League (SRL) virtual predictions
+  bot.command(['srl', 'simulated'], async (ctx: Context) => {
+    try {
+      const text = ctx.message?.text || '';
+      const parts = text.replace(/^\/(srl|simulated)\s*/i, '').trim().split(/\s+/);
+      const targetOdds = parseFloat(parts[0]) || 5.0;
+
+      await ctx.reply(`🎮 Generating an optimized ~${targetOdds}x slip of live Simulated Reality League (SRL) games...`);
+
+      const result = await SportyBetCatalog.buildSrlSlip(targetOdds, 'SportyBet');
+      const otherCodes = formatPlatformCodesCompact(result.multiCodes, 'SportyBet');
+      const avgConfPct = Math.round(result.averageConfidence * 100);
+
+      const msg =
+        `🎮 *G-BAM SIMULATED REALITY (SRL) SLIP • ${result.totalOdds}x ODDS*\n` +
+        `⚡ *Virtual AI Football • Settles Fast* • 🛡️ Avg Win: *${avgConfPct}%*\n\n` +
+        `📲 *SportyBet:* \`${result.bookingCode}\` *(Tap to copy)*\n` +
+        (otherCodes ? `🔄 ${otherCodes}\n\n` : '\n') +
+        `⚽ *Selections (${result.picks.length} matches):*\n` +
+        result.picks.map((p, i) => `  ${i + 1}. *${p.homeTeam} vs ${p.awayTeam}* ➔ ${formatOutcomeCompact(p.marketDesc, p.outcomeDesc)} @ ${p.odds}`).join('\n') +
+        `\n\n⚠️ _Notice: SRL (Simulated Reality League) games are computer-simulated matches based on real team statistics. Settles rapidly 24/7._`;
+
+      await ctx.reply(msg, { parse_mode: 'Markdown' });
+    } catch (err: any) {
+      await ctx.reply(`❌ Could not generate SRL slip: ${err.message || 'Please try again in a few minutes.'}`);
+    }
+  });
+
   // /predict <home> vs <away>
   bot.command('predict', async (ctx: Context) => {
     const text = ctx.message?.text || '';
@@ -1188,6 +1221,31 @@ export function createBot(token: string) {
       const timeframeNotice = timeframe.type === 'RUNNING'
         ? ` (${timeframe.days}-day running ticket)`
         : ` (today's games only)`;
+
+      // If user specifically asked for SRL / simulated matches in natural language
+      if (lower.includes('srl') || lower.includes('simulated')) {
+        await ctx.reply(`🎮 Building you an optimized ~${requestedOdds}x slip of live Simulated Reality League (SRL) matches for *${targetPlatform}*...`, { parse_mode: 'Markdown' });
+        try {
+          const result = await SportyBetCatalog.buildSrlSlip(requestedOdds, targetPlatform);
+          const otherCodes = formatPlatformCodesCompact(result.multiCodes, result.targetBookmaker);
+          const avgConfPct = Math.round(result.averageConfidence * 100);
+
+          const msg =
+            `🎮 *G-BAM SIMULATED REALITY (SRL) SLIP • ${result.totalOdds}x ODDS*\n` +
+            `⚡ *Virtual AI Football • Settles Fast* • 🛡️ Avg Win: *${avgConfPct}%*\n\n` +
+            `📲 *${result.targetBookmaker}:* \`${result.bookingCode}\` *(Tap to copy)*\n` +
+            (otherCodes ? `🔄 ${otherCodes}\n\n` : '\n') +
+            `⚽ *Selections (${result.picks.length} matches):*\n` +
+            result.picks.map((p, i) => `  ${i + 1}. *${p.homeTeam} vs ${p.awayTeam}* ➔ ${formatOutcomeCompact(p.marketDesc, p.outcomeDesc)} @ ${p.odds}`).join('\n') +
+            `\n\n⚠️ _Notice: SRL games are virtual simulations powered by AI & club statistics._`;
+
+          await ctx.reply(msg, { parse_mode: 'Markdown' });
+          return;
+        } catch (err: any) {
+          await ctx.reply(`❌ Could not generate SRL slip: ${err.message}`);
+          return;
+        }
+      }
 
       const statusText = marketLabel
         ? `🎯 Building you an optimized ~${requestedOdds}x slip specializing in *${marketLabel}* for *${targetPlatform}*${timeframeNotice}...`

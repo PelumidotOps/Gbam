@@ -1736,4 +1736,235 @@ export class SportyBetCatalog {
     }
     return code;
   }
+
+  /**
+   * Dynamically fetches live and upcoming Simulated Reality League (SRL) matches from SportyBet
+   */
+  public static async getLiveSrlEvents(): Promise<SportyMatchOutcome[]> {
+    const srlQueries = ['SRL', 'Premier League SRL', 'LaLiga SRL', 'Serie A SRL', 'Bundesliga SRL', 'Champions League SRL'];
+    const eventMap = new Map<string, any>();
+
+    const searchPromises = srlQueries.map(async query => {
+      try {
+        const res = await fetch(`https://www.sportybet.com/api/ng/factsCenter/search?q=${encodeURIComponent(query)}`, {
+          headers: {
+            'User-Agent':
+              'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+            Accept: 'application/json'
+          },
+          signal: AbortSignal.timeout(6000)
+        });
+        if (!res.ok) return;
+        const j = (await res.json()) as any;
+        const fb = j.data?.results?.find((r: any) => r.categoryId === 'sr:sport:1');
+        const matches = (fb?.matches?.upcoming || []).concat(fb?.matches?.live || []);
+        for (const m of matches) {
+          if (m.eventId && !eventMap.has(m.eventId)) {
+            eventMap.set(m.eventId, m);
+          }
+        }
+      } catch (err: any) {
+        // Silently skip failed query
+      }
+    });
+
+    await Promise.all(searchPromises);
+
+    const outcomes: SportyMatchOutcome[] = [];
+
+    // Process SRL events and extract high-probability outcomes
+    const events = Array.from(eventMap.values()).slice(0, 30);
+    for (const ev of events) {
+      const homeName = ev.homeTeamName || 'Home Team';
+      const awayName = ev.awayTeamName || 'Away Team';
+      const leagueName = ev.sport?.category?.tournament?.name || 'Simulated Reality League';
+      const categoryName = 'Simulated Reality League';
+
+      let markets = ev.markets;
+      if (!markets || markets.length === 0) {
+        const details = await this.fetchEventDetails(ev.eventId);
+        if (details?.markets) markets = details.markets;
+      }
+
+      if (!markets || !Array.isArray(markets) || markets.length === 0) {
+        const { homeLambda, awayLambda } = this.estimateTeamStrength(homeName, awayName, leagueName);
+        const probs = PoissonModel.calculateMatchProbabilities({ homeLambda, awayLambda });
+        if (probs.dc1X >= 0.75) {
+          const odds = Math.max(1.15, Number((0.98 / probs.dc1X).toFixed(2)));
+          outcomes.push({
+            eventId: ev.eventId,
+            homeTeam: homeName,
+            awayTeam: awayName,
+            tournament: leagueName,
+            category: categoryName,
+            marketId: '10',
+            marketDesc: 'Double Chance',
+            specifier: '',
+            outcomeId: '9',
+            outcomeDesc: 'Home or Draw',
+            odds,
+            confidence: probs.dc1X,
+            estimateStartTime: ev.estimateStartTime || Date.now() + 15 * 60 * 1000
+          });
+        }
+        continue;
+      }
+
+      // Check for 1X2 (Market 1)
+      const m1 = markets.find((m: any) => m.id === '1');
+      if (m1 && Array.isArray(m1.outcomes)) {
+        for (const o of m1.outcomes) {
+          const oddsNum = parseFloat(o.odds);
+          if (oddsNum >= 1.20 && oddsNum <= 1.65) {
+            const conf = Math.min(0.85, 0.95 / oddsNum);
+            outcomes.push({
+              eventId: ev.eventId,
+              homeTeam: homeName,
+              awayTeam: awayName,
+              tournament: leagueName,
+              category: categoryName,
+              marketId: '1',
+              marketDesc: '1X2',
+              specifier: '',
+              outcomeId: o.id,
+              outcomeDesc: o.desc,
+              odds: oddsNum,
+              confidence: conf,
+              estimateStartTime: ev.estimateStartTime || Date.now() + 15 * 60 * 1000
+            });
+            break;
+          }
+        }
+      }
+
+      // Check for Double Chance (Market 10)
+      const m10 = markets.find((m: any) => m.id === '10');
+      if (m10 && Array.isArray(m10.outcomes)) {
+        for (const o of m10.outcomes) {
+          const oddsNum = parseFloat(o.odds);
+          if (oddsNum >= 1.12 && oddsNum <= 1.40) {
+            const conf = Math.min(0.88, 0.96 / oddsNum);
+            outcomes.push({
+              eventId: ev.eventId,
+              homeTeam: homeName,
+              awayTeam: awayName,
+              tournament: leagueName,
+              category: categoryName,
+              marketId: '10',
+              marketDesc: 'Double Chance',
+              specifier: '',
+              outcomeId: o.id,
+              outcomeDesc: o.desc,
+              odds: oddsNum,
+              confidence: conf,
+              estimateStartTime: ev.estimateStartTime || Date.now() + 15 * 60 * 1000
+            });
+            break;
+          }
+        }
+      }
+
+      // Check for Over/Under Goals (Market 18)
+      const m18 = markets.find((m: any) => m.id === '18' && (m.specifier?.includes('1.5') || m.specifier?.includes('2.5') || m.specifier?.includes('3.5')));
+      if (m18 && Array.isArray(m18.outcomes)) {
+        for (const o of m18.outcomes) {
+          const oddsNum = parseFloat(o.odds);
+          if (oddsNum >= 1.18 && oddsNum <= 1.45) {
+            const conf = Math.min(0.84, 0.95 / oddsNum);
+            outcomes.push({
+              eventId: ev.eventId,
+              homeTeam: homeName,
+              awayTeam: awayName,
+              tournament: leagueName,
+              category: categoryName,
+              marketId: '18',
+              marketDesc: m18.desc || 'Over/Under',
+              specifier: m18.specifier || '',
+              outcomeId: o.id,
+              outcomeDesc: o.desc,
+              odds: oddsNum,
+              confidence: conf,
+              estimateStartTime: ev.estimateStartTime || Date.now() + 15 * 60 * 1000
+            });
+            break;
+          }
+        }
+      }
+    }
+
+    return outcomes;
+  }
+
+  /**
+   * Assembles an exclusive slip comprised solely of Simulated Reality League (SRL) matches
+   */
+  public static async buildSrlSlip(
+    targetOdds: number = 5.0,
+    preferredBookmaker: string = 'SportyBet'
+  ): Promise<{
+    picks: SportyMatchOutcome[];
+    totalOdds: number;
+    averageConfidence: number;
+    bookingCode: string;
+    targetBookmaker: string;
+    multiCodes: Record<string, string>;
+  }> {
+    const candidates = await this.getLiveSrlEvents();
+
+    if (candidates.length === 0) {
+      throw new Error(
+        'No upcoming Simulated Reality League (SRL) matches are currently scheduled on bookmakers. Please try again shortly as new SRL matches start every 15-30 minutes!'
+      );
+    }
+
+    // Group candidates by match to avoid duplicate games on the same ticket
+    const byMatch = new Map<string, SportyMatchOutcome[]>();
+    for (const c of candidates) {
+      const key = `${c.homeTeam}_vs_${c.awayTeam}`;
+      if (!byMatch.has(key)) byMatch.set(key, []);
+      byMatch.get(key)!.push(c);
+    }
+
+    const selected: SportyMatchOutcome[] = [];
+    const seenMatches = new Set<string>();
+    let currentOdds = 1.0;
+
+    for (const [mKey, options] of byMatch) {
+      if (seenMatches.has(mKey)) continue;
+      options.sort((a, b) => b.confidence - a.confidence || a.odds - b.odds);
+      const chosen = options[0];
+      if (!chosen) continue;
+
+      seenMatches.add(mKey);
+      selected.push(chosen);
+      currentOdds *= chosen.odds;
+
+      if (currentOdds >= targetOdds * 0.90 && selected.length >= 2) {
+        break;
+      }
+    }
+
+    if (selected.length === 0) {
+      throw new Error('Could not find enough high-probability SRL selections right now. Please try again in a few minutes.');
+    }
+
+    const avgConfidence = selected.reduce((acc, p) => acc + p.confidence, 0) / selected.length;
+    const legs = selected.map(p => this.toBetLeg(p));
+    const multiCodes = await BookmakerRegistry.getMultiBookingCodes(legs);
+    const resolvedAdapter = BookmakerRegistry.get(preferredBookmaker);
+
+    let bookingCode = multiCodes[resolvedAdapter.name];
+    if (!bookingCode || bookingCode.length < 4) {
+      bookingCode = await resolvedAdapter.generateBookingCode(legs);
+    }
+
+    return {
+      picks: selected,
+      totalOdds: Number(currentOdds.toFixed(2)),
+      averageConfidence: avgConfidence,
+      bookingCode,
+      targetBookmaker: resolvedAdapter.name,
+      multiCodes
+    };
+  }
 }
