@@ -716,12 +716,31 @@ export class SportyBetCatalog {
   public static async getTieredPicks(): Promise<TieredPicksResult> {
     await this.refreshCatalog();
     this.cleanExpiredEvents();
-    const minKickoff = Date.now() + 15 * 60 * 1000;
-    const all = Array.from(this.pool.values()).filter(
+
+    const now = Date.now();
+    const nowLagos = new Date(new Date().toLocaleString('en-US', { timeZone: 'Africa/Lagos' }));
+    const endOfTodayLagos = new Date(nowLagos);
+    endOfTodayLagos.setHours(23, 59, 59, 999);
+    const msUntilEndOfDay = endOfTodayLagos.getTime() - nowLagos.getTime();
+    const todayCutoff = now + msUntilEndOfDay;
+    const minKickoff = now + 15 * 60 * 1000;
+
+    // Strictly filter for matches kicking off TODAY (settles tonight before 23:59 WAT)
+    let todayCandidates = Array.from(this.pool.values()).filter(
       p => p.estimateStartTime &&
       p.estimateStartTime > minKickoff &&
+      p.estimateStartTime <= todayCutoff &&
       !this.isSimulatedOrVirtualMatch(p.homeTeam, p.awayTeam, p.tournament, p.category)
     );
+
+    // Emergency fallback only if late at night (< 5 matches left today)
+    const all = todayCandidates.length >= 5
+      ? todayCandidates
+      : Array.from(this.pool.values()).filter(
+          p => p.estimateStartTime &&
+          p.estimateStartTime > minKickoff &&
+          !this.isSimulatedOrVirtualMatch(p.homeTeam, p.awayTeam, p.tournament, p.category)
+        );
 
     // Sort pool by highest confidence first
     const sorted = all.sort((a, b) => b.confidence - a.confidence || a.odds - b.odds);
@@ -1428,13 +1447,14 @@ export class SportyBetCatalog {
         e => e.estimateStartTime && e.estimateStartTime > minKickoff && e.estimateStartTime <= todayCutoff
       ).length;
 
-      // If it is late evening and today has fewer than 20 remaining matches, or if targetOdds is >= 4.5, automatically span to the next 24-36h (Today & Tomorrow) so tickets have ample high-probability matches to reach the target odds!
-      if (availableToday < 20 || targetOdds >= 4.5) {
-        maxTimestamp = now + 36 * 60 * 60 * 1000;
-        scheduleLabel = availableToday < 6 ? 'Next 24 Hours (Today & Tomorrow)' : 'Today & Tomorrow';
-      } else {
-        maxTimestamp = todayCutoff;
-        scheduleLabel = 'Today Only (Settles Tonight)';
+      // Strictly enforce Today Only: tickets settle tonight unless the user explicitly requests a running slip!
+      maxTimestamp = todayCutoff;
+      scheduleLabel = 'Today Only (Settles Tonight)';
+
+      // Only if it is very late at night and today has fewer than 4 remaining matches, expand to next 24h
+      if (availableToday < 4) {
+        maxTimestamp = now + 24 * 60 * 60 * 1000;
+        scheduleLabel = 'Next 24 Hours (Today & Tomorrow)';
       }
     } else {
       const days = timeframe.days;
@@ -1596,8 +1616,12 @@ export class SportyBetCatalog {
       const options = byMatch.get(mKey) || [];
       if (options.length === 0) continue;
 
-      // Filter to only verified high-probability winners (strictly >= 0.74 confidence, safe odds >= 1.12)
-      const viableOptions = options.filter(o => o.confidence >= 0.74 && o.odds >= 1.12);
+      // Filter to only verified high-probability winners (strictly >= 0.74 confidence, safe odds >= 1.12, respecting timeframe cutoff)
+      const viableOptions = options.filter(
+        o => o.confidence >= 0.74 &&
+        o.odds >= 1.12 &&
+        (!maxTimestamp || !o.estimateStartTime || o.estimateStartTime <= maxTimestamp)
+      );
       if (viableOptions.length === 0) continue;
 
       // Select the single highest win-rate outcome for this match (no duplicate matches per ticket)
